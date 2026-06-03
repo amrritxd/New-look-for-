@@ -1,0 +1,3736 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gaon Digital</title>
+  <!-- Google Fonts: Poppins -->
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- FontAwesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <!-- Firebase Companion SDKs (v8) -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js"></script>
+  <!-- React and Standalone Babel Compiler -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            primary: '#2E7D32',
+            accent: '#FF6F00',
+            bgLight: '#F1F8E9'
+          },
+          fontFamily: {
+            sans: ['Poppins', 'sans-serif']
+          }
+        }
+      }
+    }
+  </script>
+  <style>
+    body {
+      background-color: #F1F8E9;
+      font-family: 'Poppins', sans-serif;
+      touch-action: manipulation;
+    }
+    /* Pulsing Animation for SOS */
+    @keyframes pulse-sos {
+      0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.7); }
+      70% { transform: scale(1.08); box-shadow: 0 0 0 20px rgba(220, 38, 38, 0); }
+      100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+    }
+    .sos-pulse {
+      animation: pulse-sos 1.8s infinite;
+    }
+    /* Hide scrollbars but keep functionality */
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+</head>
+<body class="max-w-md mx-auto min-h-screen bg-bgLight flex flex-col relative text-gray-800 shadow-xl overflow-x-hidden">
+  <div id="root" class="flex flex-col w-full min-h-screen"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    // Firebase Global Configuration Check
+    const firebaseConfig = {
+      apiKey: "AIzaSyDRoRxc7yPRXgr2UWfgCTAhC7TuxPxiSvI",
+      authDomain: "all-projects-use.firebaseapp.com",
+      databaseURL: "https://all-projects-use-default-rtdb.firebaseio.com",
+      projectId: "all-projects-use",
+      storageBucket: "all-projects-use.firebasestorage.app",
+      messagingSenderId: "891525610267",
+      appId: "1:891525610267:web:c2caea95110eabdeb731be",
+      measurementId: "G-2ZR0PSDZ8T"
+    };
+
+    // FCM Web Push VAPID Key (Cloud Messaging Certificate)
+    const FCM_VAPID_KEY = "ekbVJ-l6hVWhMGcYz8dYU6EM_ocAJDVvM0ZACDVcmtY";
+
+    // ── Emergency Alarm Sound System ──
+    // Web Audio API se loud beeping alarm generate karta hai (koi MP3 file nahi chahiye)
+    let _alarmOscillators = [];
+    let _alarmInterval = null;
+
+    const playEmergencyAlarm = () => {
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) return;
+
+        // Pehle se chal raha ho toh stop karo
+        stopEmergencyAlarm();
+
+        const ctx = new AudioCtx();
+        window._alarmAudioCtx = ctx;
+
+        const beep = () => {
+          const osc = ctx.createOscillator();
+          const gainNode = ctx.createGain();
+          osc.connect(gainNode);
+          gainNode.connect(ctx.destination);
+          osc.type = "square";
+          osc.frequency.setValueAtTime(880, ctx.currentTime);
+          osc.frequency.setValueAtTime(1760, ctx.currentTime + 0.15);
+          gainNode.gain.setValueAtTime(1.0, ctx.currentTime);
+          gainNode.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.3);
+          osc.start(ctx.currentTime);
+          osc.stop(ctx.currentTime + 0.3);
+          _alarmOscillators.push(osc);
+        };
+
+        // Pehli baar turant bajao
+        beep();
+        // Repeat karo har 600ms
+        _alarmInterval = setInterval(beep, 600);
+
+        // 30 seconds ke baad automatically stop
+        setTimeout(() => stopEmergencyAlarm(), 30000);
+      } catch (e) {
+        console.warn("Alarm audio failed:", e);
+      }
+    };
+
+    const stopEmergencyAlarm = () => {
+      if (_alarmInterval) {
+        clearInterval(_alarmInterval);
+        _alarmInterval = null;
+      }
+      if (window._alarmAudioCtx) {
+        try { window._alarmAudioCtx.close(); } catch(e) {}
+        window._alarmAudioCtx = null;
+      }
+      _alarmOscillators = [];
+      window._sosAlarmActive = false;
+    };
+
+    // ── Service Worker Registration ──
+    const registerServiceWorker = async () => {
+      if (!("serviceWorker" in navigator)) {
+        console.warn("Service Worker not supported");
+        return;
+      }
+      try {
+        const reg = await navigator.serviceWorker.register("/firebase-messaging-sw.js", {
+          scope: "/"
+        });
+        console.log("✅ Service Worker registered:", reg.scope);
+
+        // SW se message aane par (background SOS alarm trigger)
+        navigator.serviceWorker.addEventListener("message", (event) => {
+          if (event.data && event.data.type === "SOS_ALARM") {
+            playEmergencyAlarm();
+            window._sosAlarmActive = true;
+          }
+          if (event.data && event.data.type === "STOP_ALARM") {
+            stopEmergencyAlarm();
+          }
+        });
+      } catch (err) {
+        console.warn("SW registration failed:", err);
+      }
+    };
+
+    // SW register karo page load par
+    registerServiceWorker();
+
+    let dbRef = null;
+    let messagingRef = null;
+
+    try {
+      if (!firebase.apps.length) {
+        firebase.initializeApp(firebaseConfig);
+      }
+      dbRef = firebase.database();
+
+      // Initialize FCM Messaging if browser supports it
+      if (firebase.messaging.isSupported()) {
+        messagingRef = firebase.messaging();
+
+        // Handle foreground (app open) push notifications
+        messagingRef.onMessage((payload) => {
+          console.log("FCM Foreground Message received:", payload);
+          const title = payload.notification?.title || payload.data?.title || "नई सूचना";
+          const body = payload.notification?.body || payload.data?.body || "";
+          const type = payload.data?.type || "";
+
+          // SOS foreground mein alarm bajao
+          if (type === "sos") {
+            playEmergencyAlarm();
+            window._sosAlarmActive = true;
+          }
+
+          // Show browser notification if permission granted
+          if (Notification.permission === "granted") {
+            new Notification(title, {
+              body,
+              icon: "/favicon.ico",
+              badge: "/favicon.ico",
+              vibrate: [500, 200, 500, 200, 500],
+              requireInteraction: type === "sos"
+            });
+          }
+
+          // Also trigger AndroidApp bridge if available
+          if (typeof AndroidApp !== "undefined") {
+            try {
+              AndroidApp.showNotification(title, body);
+              AndroidApp.triggerVibration();
+            } catch (e) {
+              console.error("AndroidApp FCM bridge failed:", e);
+            }
+          }
+        });
+      }
+    } catch (e) {
+      console.warn("Firebase Initialisation offline fallback enabled", e);
+    }
+
+    // ── FCM Token Registration Helper ──
+    // Call this after user logs in to register their FCM push token in Firebase
+    const registerFCMToken = async (deviceId) => {
+      if (!messagingRef || !dbRef || !deviceId) return;
+      try {
+        const permission = await Notification.requestPermission();
+        if (permission !== "granted") {
+          console.warn("Notification permission denied by user");
+          return;
+        }
+        const token = await messagingRef.getToken({ vapidKey: FCM_VAPID_KEY });
+        if (token) {
+          // Save token in Firebase under users/{deviceId}/fcmToken
+          await dbRef.ref(`users/${deviceId}/fcmToken`).set(token);
+          // Also save in localStorage for reference
+          localStorage.setItem(`fcm_token_${deviceId}`, token);
+          console.log("✅ FCM Token registered successfully:", token.slice(0, 20) + "...");
+        }
+      } catch (err) {
+        console.warn("FCM Token registration failed (offline or SW missing):", err);
+      }
+    };
+
+    // Static Setup Configuration Constants
+    const VILLAGES = [
+      "नंदलालपुर (Nandlalpur)", "देवीपुर (Devipur)", "चांदनीचौक (Chandni Chowk)", "बसकोला (Baskola)"
+    ];
+
+    const ROLES = [
+      { id: "Kisan", label: "👨‍🌾 किसान (Kisan)" },
+      { id: "Doctor", label: "🩺 डॉक्टर (Doctor)" },
+      { id: "Pandit", label: "📿 पंडित (Pandit)" },
+      { id: "Dukandaar", label: "🛒 दुकानदार (Dukandaar)" },
+      { id: "Mistri", label: "🛠️ मिस्त्री (Mistri)" },
+      { id: "Neta/Sarpanch", label: "👑 नेता/सरपंच (Sarpanch)" },
+      { id: "Rozgaar Dhundhne Wala", label: "💼 रोज़गार ढूंढने वाला" },
+      { id: "Mahila Bachat Samuh", label: "👭 महिला बचत समूह" },
+      { id: "Chaatravritti Student", label: "🎓 छात्रवृत्ति स्टूडेंट" }
+    ];
+
+    const BAZAAR_CATEGORIES = ["Anaj", "Dudh_Makhhan", "Sashya", "Aujaur", "Other"];
+    const BAZAAR_CATEGORIES_LABELS = {
+      "Anaj": "🌾 अनाज व फसलें",
+      "Dudh_Makhhan": "🥛 दूध व डेयरी उत्पाद",
+      "Sashya": "🌱 सब्जियाँ व फल",
+      "Aujaur": "🛠️ कृषि उपकरण / औजार",
+      "Other": "📦 अन्य उत्पाद"
+    };
+
+    // Pre-seeded Directory database starts fresh as empty
+    const SEED_USERS = [];
+
+    // Pre-seeded bazaar records starts fresh as empty
+    const SEED_POSTS = [];
+
+    // Helper to safely extract clean ASCII paths for Firebase references
+    const getCleanVillagePath = (gaonName) => {
+      if (!gaonName) return "default_village";
+      const englishMatch = gaonName.match(/\(([^)]+)\)/);
+      const rawKey = englishMatch ? englishMatch[1] : gaonName;
+      return rawKey.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+    };
+
+    // High fidelity photo compressor to avoid LocalStorage constraints & Firebase upload exceptions
+    const compressAndLoadPhoto = (file, callback) => {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement("canvas");
+          let width = img.width;
+          let height = img.height;
+          const MAX_SIZE = 400; // Optimum photo resolution for fast load
+          if (width > height) {
+            if (width > MAX_SIZE) {
+              height *= MAX_SIZE / width;
+              width = MAX_SIZE;
+            }
+          } else {
+            if (height > MAX_SIZE) {
+              width *= MAX_SIZE / height;
+              height = MAX_SIZE;
+            }
+          }
+          canvas.width = width;
+          canvas.height = height;
+          const ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, width, height);
+          const compressed = canvas.toDataURL("image/jpeg", 0.6); // 60% compression quality standard
+          callback(compressed);
+        };
+        img.onerror = () => {
+          // Fallback to uncompressed in case of image load error
+          callback(event.target.result);
+        };
+        img.src = event.target.result;
+      };
+      reader.onerror = () => {
+        console.error("FileReader failed");
+      };
+      reader.readAsDataURL(file);
+    };
+
+    // Main Master App Component
+    function GaonDigitalApp() {
+      // 1. Core State Definition
+      const [user, setUser] = useState(null);
+      const [activeTab, setActiveTab] = useState("ghar"); // ghar | bazaar | chat | refer | mera
+      const [allUsers, setAllUsers] = useState([]);
+      const [allPosts, setAllPosts] = useState([]);
+      const [unreadNotifications, setUnreadNotifications] = useState(0);
+      const [notifications, setNotifications] = useState([]);
+      const [showNotificationsView, setShowNotificationsView] = useState(false);
+      const [showDirectoryView, setShowDirectoryView] = useState(false);
+      const [showAddPostModal, setShowAddPostModal] = useState(false);
+      const [showAdminPanel, setShowAdminPanel] = useState(false);
+      const [showSOSAlert, setShowSOSAlert] = useState(false);
+      const [currentLocation, setCurrentLocation] = useState(null);
+      const [toast, setToast] = useState(null);
+
+      // Back button interception / overlay tracking stack
+      const overlayStackRef = useRef([]);
+
+      const openOverlay = useCallback((setterFunc, value = true) => {
+        setterFunc(value);
+        window.history.pushState({ overlayOpen: true }, "");
+        overlayStackRef.current.push(() => {
+          setterFunc(null);
+        });
+      }, []);
+
+      useEffect(() => {
+        const handlePopState = (event) => {
+          if (overlayStackRef.current.length > 0) {
+            const closeFunc = overlayStackRef.current.pop();
+            closeFunc();
+          } else if (activeTab !== "ghar") {
+            // If on another tab, return to home tab
+            setActiveTab("ghar");
+          }
+        };
+        window.addEventListener("popstate", handlePopState);
+        return () => {
+          window.removeEventListener("popstate", handlePopState);
+        };
+      }, [activeTab]);
+
+      // Initialize Application
+      useEffect(() => {
+        // App Load Opens Counter Setup
+        const totalOpens = localStorage.getItem("app_opens") 
+          ? parseInt(localStorage.getItem("app_opens")) + 1 
+          : 1;
+        localStorage.setItem("app_opens", totalOpens);
+
+        // Fetch User profile
+        const savedUser = localStorage.getItem("gaon_user");
+        if (savedUser) {
+          try {
+            const parsed = JSON.parse(savedUser);
+            parsed.appOpens = totalOpens;
+            localStorage.setItem("gaon_user", JSON.stringify(parsed));
+            setUser(parsed);
+            
+            // Register FCM push token for this device
+            registerFCMToken(parsed.deviceId);
+
+            // Sync user's openings counter with the master index
+            updateMasterUserDb(parsed.deviceId, { appOpens: totalOpens });
+          } catch(err) {
+            console.error("User parse error", err);
+          }
+        }
+
+        // Initialize localStorage arrays with fallback seed data if empty
+        if (!localStorage.getItem("village_users")) {
+          localStorage.setItem("village_users", JSON.stringify(SEED_USERS));
+        }
+        if (!localStorage.getItem("bazaar_posts")) {
+          localStorage.setItem("bazaar_posts", JSON.stringify(SEED_POSTS));
+        }
+        if (!localStorage.getItem("referrals")) {
+          localStorage.setItem("referrals", JSON.stringify([]));
+        }
+        if (!localStorage.getItem("withdrawals")) {
+          localStorage.setItem("withdrawals", JSON.stringify([]));
+        }
+        if (!localStorage.getItem("sos_log")) {
+          localStorage.setItem("sos_log", JSON.stringify([]));
+        }
+
+        // Load reactive local states
+        loadAppData();
+      }, []);
+
+      // Real-time synchronization of Firebase alerts & announcements + registered users
+      useEffect(() => {
+        if (!user || !dbRef) return;
+
+        // 0. Listen for all registered village users in Firebase to keep contact directories in perfect sync
+        const usersRef = dbRef.ref("users");
+        const onUsersValue = usersRef.on("value", (snapshot) => {
+          const remoteUsers = snapshot.val();
+          if (remoteUsers) {
+            const list = Object.values(remoteUsers);
+            const localUsers = JSON.parse(localStorage.getItem("village_users") || "[]");
+            const mergedMap = {};
+            SEED_USERS.forEach(u => { mergedMap[u.deviceId] = u; });
+            localUsers.forEach(u => { mergedMap[u.deviceId] = u; });
+            list.forEach(u => { if (u && u.deviceId) mergedMap[u.deviceId] = u; });
+            
+            const mergedList = Object.values(mergedMap);
+            localStorage.setItem("village_users", JSON.stringify(mergedList));
+            setAllUsers(mergedList);
+          }
+        });
+
+        // Ensure current active user is registered dynamically in the Firebase central index
+        if (user && user.deviceId) {
+          usersRef.child(user.deviceId).set(user)
+            .then(() => console.log("Self user profile synchronized to Firebase successfully"))
+            .catch(err => console.debug("Firebase profile sync offline fallback enabled", err));
+        }
+
+        // 1. Listen for global broadcasts (expanded limit to last 100 entries)
+        const globalRef = dbRef.ref("broadcasts");
+        const onGlobalAdded = globalRef.limitToLast(100).on("child_added", (snapshot) => {
+          const data = snapshot.val();
+          if (data && data.timestamp > user.createdAt) {
+            const key = `notifications_${user.deviceId}`;
+            const local = JSON.parse(localStorage.getItem(key) || "[]");
+            if (!local.some(n => n.id === snapshot.key)) {
+              const newNot = {
+                id: snapshot.key,
+                title: data.title,
+                message: data.message,
+                type: data.type || "announcement",
+                timestamp: data.timestamp,
+                read: false
+              };
+              local.push(newNot);
+              localStorage.setItem(key, JSON.stringify(local));
+              setNotifications(local.sort((a, b) => b.timestamp - a.timestamp));
+              setUnreadNotifications(local.filter(n => !n.read).length);
+              triggerToast(`📢 ${data.title}`);
+ 
+              // Trigger real physical Android notification and vibration
+              if (typeof AndroidApp !== "undefined") {
+                try {
+                  AndroidApp.showNotification(data.title, data.message);
+                  AndroidApp.triggerVibration();
+                } catch (e) {
+                  console.error(e);
+                }
+              }
+            }
+          }
+        });
+
+        // 2. Listen for village-specific urgent SOS alerts (expanded limit to last 100 entries)
+        const path = getCleanVillagePath(user.gaon);
+        const alertsRef = dbRef.ref(`village_alerts/${path}`);
+        const onAlertAdded = alertsRef.limitToLast(100).on("child_added", (snapshot) => {
+          const data = snapshot.val();
+          if (data && data.timestamp > user.createdAt && data.senderId !== user.deviceId) {
+            const key = `notifications_${user.deviceId}`;
+            const local = JSON.parse(localStorage.getItem(key) || "[]");
+            if (!local.some(n => n.id === snapshot.key)) {
+              const newNot = {
+                id: snapshot.key,
+                title: data.title,
+                message: data.message,
+                type: data.type || "sos",
+                timestamp: data.timestamp,
+                read: false
+              };
+              local.push(newNot);
+              localStorage.setItem(key, JSON.stringify(local));
+              setNotifications(local.sort((a, b) => b.timestamp - a.timestamp));
+              setUnreadNotifications(local.filter(n => !n.read).length);
+              triggerToast(`🚨 ${data.title}`);
+              if (data.type === "sos") {
+                setShowSOSAlert(true);
+                // 🚨 Foreground alarm — app khula ho to bhi bajega
+                playEmergencyAlarm();
+                window._sosAlarmActive = true;
+              }
+
+              // Trigger real physical Android notification and vibration
+              if (typeof AndroidApp !== "undefined") {
+                try {
+                  AndroidApp.showNotification(data.title, data.message);
+                  AndroidApp.triggerVibration();
+                } catch (e) {
+                  console.error(e);
+                }
+              }
+            }
+          }
+        });
+
+        // 3. Listen for village bazaar posts in real-time
+        const bazaarRef = dbRef.ref(`bazaar_posts/${path}`);
+        bazaarRef.on("value", (snapshot) => {
+          const data = snapshot.val();
+          const list = [];
+          if (data) {
+            Object.keys(data).forEach(k => list.push({ id: k, ...data[k] }));
+          }
+          const sorted = list.sort((a, b) => b.timestamp - a.timestamp);
+          localStorage.setItem("bazaar_posts", JSON.stringify(sorted));
+          setAllPosts(sorted);
+        });
+
+        return () => {
+          usersRef.off("value");
+          globalRef.off("child_added", onGlobalAdded);
+          alertsRef.off("child_added", onAlertAdded);
+          bazaarRef.off("value");
+        };
+      }, [user]);
+
+      // Reload databases from localStorage
+      const loadAppData = () => {
+        const users = JSON.parse(localStorage.getItem("village_users") || "[]");
+        const posts = JSON.parse(localStorage.getItem("bazaar_posts") || "[]");
+        setAllUsers(users);
+        setAllPosts(posts.sort((a,b) => b.timestamp - a.timestamp));
+
+        // Load notifications for this device
+        if (localStorage.getItem("gaon_user")) {
+          const u = JSON.parse(localStorage.getItem("gaon_user"));
+          const notSec = JSON.parse(localStorage.getItem(`notifications_${u.deviceId}`) || "[]");
+          setNotifications(notSec.sort((a,b) => b.timestamp - a.timestamp));
+          setUnreadNotifications(notSec.filter(n => !n.read).length);
+        }
+      };
+
+      // Trigger standard in-app notifications
+      const triggerToast = (msg, isError = false) => {
+        setToast({ text: msg, error: isError });
+        setTimeout(() => setToast(null), 3000);
+
+        // Tactile vibration feedback on physical devices
+        if (typeof AndroidApp !== "undefined") {
+          try {
+            AndroidApp.triggerVibration();
+          } catch (e) {
+            console.error("Vibration failed:", e);
+          }
+        }
+      };
+
+      // Helper to dynamically update individual master database entries
+      const updateMasterUserDb = (deviceId, updates) => {
+        const users = JSON.parse(localStorage.getItem("village_users") || "[]");
+        const idx = users.findIndex(u => u.deviceId === deviceId);
+        if (idx !== -1) {
+          users[idx] = { ...users[idx], ...updates };
+          localStorage.setItem("village_users", JSON.stringify(users));
+          setAllUsers(users);
+        }
+      };
+
+      // 2. Onboarding complete logic
+      const handleOnboardFinish = (profileData) => {
+        // Fingerprinting logic
+        const fp = [navigator.userAgent, screen.width, screen.height, navigator.language, navigator.hardwareConcurrency, new Date().getTimezoneOffset()].join("||");
+        const deviceId = btoa(fp).slice(0, 32);
+
+        // Retrieve existing records
+        const users = JSON.parse(localStorage.getItem("village_users") || "[]");
+
+        // ANTI-FRAUD Verification 1: Prevent duplicate device registrations
+        const isSelfDeviceDuplicated = users.some(u => u.deviceId === deviceId);
+        if (isSelfDeviceDuplicated) {
+          // Instead of onboarding again, log them in instantly as security measure
+          const existingAcc = users.find(u => u.deviceId === deviceId);
+          localStorage.setItem("gaon_user", JSON.stringify(existingAcc));
+          setUser(existingAcc);
+          triggerToast("आपका डिवाइस पहले से रजिस्टर्ड है! स्वागत है दोबारा।");
+          loadAppData();
+          return;
+        }
+
+        // ANTI-FRAUD Verification 2: Prevent duplicate mobile numbers
+        const isMobileRegistered = users.some(u => u.mobile === profileData.mobile);
+        if (isMobileRegistered) {
+          triggerToast("यह मोबाइल नंबर पहले से registered है!", true);
+          return;
+        }
+
+        const refCode = deviceId.slice(0, 8).toUpperCase();
+        const finalUser = {
+          deviceId,
+          naam: profileData.naam,
+          gaon: profileData.gaon,
+          mobile: profileData.mobile,
+          role: profileData.role,
+          photo: profileData.photo || "",
+          referralCode: refCode,
+          createdAt: Date.now(),
+          appOpens: parseInt(localStorage.getItem("app_opens") || "1")
+        };
+
+        // Check and validate Referral Code (Manual Input or URL parameter)
+        const params = new URLSearchParams(window.location.search);
+        const manualRef = profileData.referralCodeInput;
+        const urlRef = params.get("ref");
+        const activeRef = manualRef || urlRef;
+        if (activeRef) {
+          handleReferralAward(activeRef, finalUser);
+        }
+
+        users.push(finalUser);
+        localStorage.setItem("village_users", JSON.stringify(users));
+        localStorage.setItem("gaon_user", JSON.stringify(finalUser));
+        
+        setUser(finalUser);
+        triggerToast("रजिस्ट्रेशन सफल रहा! 🏡");
+
+        // Register FCM push token for newly registered user
+        registerFCMToken(finalUser.deviceId);
+
+        loadAppData();
+      };
+
+      // Process referrals dynamically
+      const handleReferralAward = (code, newUser) => {
+        const users = JSON.parse(localStorage.getItem("village_users") || "[]");
+        const referrals = JSON.parse(localStorage.getItem("referrals") || "[]");
+
+        const upperCode = code.toUpperCase();
+        // Look up who owns this referral code
+        const sponsor = users.find(u => u.referralCode === upperCode);
+
+        if (!sponsor) return; // Silent discard if referrer invalid
+
+        // Refer-fraud checks
+        if (sponsor.deviceId === newUser.deviceId) {
+          console.warn("Self referral detected and rejected.");
+          return;
+        }
+
+        // Check rate limiter triggers: 5+ referrals in past 24 hours
+        const refCountLast24h = referrals.filter(r => 
+          r.referrerId === sponsor.deviceId && 
+          (Date.now() - r.timestamp) < 24 * 3600 * 1000
+        ).length;
+
+        const isFlaggedState = refCountLast24h >= 4; // Including this one, it will make 5
+
+        const newReferralRecord = {
+          id: "ref_" + Math.random().toString(36).slice(2, 9),
+          referrerId: sponsor.deviceId,
+          referrerName: sponsor.naam,
+          referredId: newUser.deviceId,
+          referredName: newUser.naam,
+          mobile: newUser.mobile,
+          gaon: newUser.gaon,
+          timestamp: Date.now(),
+          status: "Pending", // Pending, Ready, Approved, Flagged
+          flagged: isFlaggedState,
+          amount: 2.0
+        };
+
+        referrals.push(newReferralRecord);
+        localStorage.setItem("referrals", JSON.stringify(referrals));
+
+        // Append notification to sponsor
+        createInAppNotification(
+          sponsor.deviceId,
+          "💰 नया रेफरल!",
+          `बधाई हो, ${newUser.naam} आपके रेफरल लिंक से जुड़े हैं। ₹2 सत्यापन हो रहा है।`,
+          "referral"
+        );
+      };
+
+      // Unified helper to inject notifications to custom local storage
+      const createInAppNotification = (targetDeviceId, title, message, type) => {
+        const key = `notifications_${targetDeviceId}`;
+        const targetList = JSON.parse(localStorage.getItem(key) || "[]");
+        targetList.push({
+          id: "not_" + Math.random().toString(36).slice(2,9),
+          title,
+          message,
+          type,
+          timestamp: Date.now(),
+          read: false
+        });
+        localStorage.setItem(key, JSON.stringify(targetList));
+        loadAppData();
+
+        // Connect real device notification & vibration using JavascriptInterface
+        if (user && targetDeviceId === user.deviceId) {
+          if (typeof AndroidApp !== "undefined") {
+            try {
+              AndroidApp.showNotification(title, message);
+              AndroidApp.triggerVibration();
+            } catch (e) {
+              console.error("AndroidApp active call failed:", e);
+            }
+          }
+        }
+      };
+
+      // Broadcast notifications to all users of a specific village
+      const broadcastVillageNotification = (villageName, title, message, type) => {
+        const users = JSON.parse(localStorage.getItem("village_users") || "[]");
+        users.forEach(u => {
+          if (u.gaon === villageName) {
+            createInAppNotification(u.deviceId, title, message, type);
+          }
+        });
+
+        // Sync to Firebase realtime database node
+        if (dbRef) {
+          const path = getCleanVillagePath(villageName);
+          dbRef.ref(`village_alerts/${path}`).push({
+            title,
+            message,
+            type,
+            timestamp: Date.now(),
+            senderId: user ? user.deviceId : "system"
+          });
+        }
+      };
+
+      // Broadcast notification globally to everyone
+      const broadcastGlobalNotification = (title, message, type) => {
+        const users = JSON.parse(localStorage.getItem("village_users") || "[]");
+        users.forEach(u => {
+          createInAppNotification(u.deviceId, title, message, type);
+        });
+
+        // Sync to Firebase realtime database node
+        if (dbRef) {
+          dbRef.ref("broadcasts").push({
+            title,
+            message,
+            type,
+            timestamp: Date.now(),
+            senderId: user ? user.deviceId : "system"
+          });
+        }
+      };
+
+      // Trigger SOS Warning System
+      const triggerEmergencySOS = () => {
+        if (!user) return;
+        
+        // Immediate physical vibration feedback
+        if (typeof AndroidApp !== "undefined") {
+          try {
+            AndroidApp.triggerVibration();
+            setTimeout(() => AndroidApp.triggerVibration(), 500);
+          } catch (e) {
+            console.error(e);
+          }
+        }
+        
+        triggerToast("⏱️ आपकी सटीक लाइव लोकेशन प्राप्त की जा रही है...");
+
+        const sendSOSWithLocation = (lat, lng) => {
+          const locationLink = (lat && lng) ? `https://www.google.com/maps?q=${lat},${lng}` : "";
+          const logs = JSON.parse(localStorage.getItem("sos_log") || "[]");
+          logs.push({
+            id: "sos_" + Date.now(),
+            user: user.naam,
+            gaon: user.gaon,
+            mobile: user.mobile,
+            timestamp: Date.now(),
+            lat: lat || "N/A",
+            lng: lng || "N/A"
+          });
+          localStorage.setItem("sos_log", JSON.stringify(logs));
+
+          const mapsMsgText = locationLink 
+            ? `${user.naam} को तुरंत मदद की आवश्यकता है! फ़ोन नंबर: ${user.mobile}। यहाँ क्लिक कर लाइव लोकेशन देखें: ${locationLink}`
+            : `${user.naam} को तुरंत मदद की आवश्यकता है! फ़ोन नंबर: ${user.mobile}। (सटीक लोकेशन प्राप्त नहीं हो पाई)`;
+
+          // Alert exact same village users via notifications
+          broadcastVillageNotification(
+            user.gaon,
+            "🚨 आपातकालीन सहायता (Emergency SOS)",
+            mapsMsgText,
+            "sos"
+          );
+
+          triggerToast("🚨 इमरजेंसी अलर्ट आपके गांव के सभी लोगों को भेज दिया गया है!");
+          setShowSOSAlert(true);
+        };
+
+        if (navigator.geolocation) {
+          navigator.geolocation.getCurrentPosition(
+            (pos) => {
+              const latitude = pos.coords.latitude;
+              const longitude = pos.coords.longitude;
+              setCurrentLocation({ lat: latitude, lng: longitude });
+              sendSOSWithLocation(latitude, longitude);
+            },
+            (err) => {
+              console.warn("Location error:", err);
+              // Fallback to existing currentLocation state or null
+              const existingLat = currentLocation?.lat;
+              const existingLng = currentLocation?.lng;
+              sendSOSWithLocation(existingLat, existingLng);
+            },
+            { enableHighAccuracy: true, timeout: 5000 }
+          );
+        } else {
+          const existingLat = currentLocation?.lat;
+          const existingLng = currentLocation?.lng;
+          sendSOSWithLocation(existingLat, existingLng);
+        }
+      };
+
+      // Mark notifications as read complete
+      const markAllNotificationsRead = () => {
+        if (!user) return;
+        const key = `notifications_${user.deviceId}`;
+        const list = JSON.parse(localStorage.getItem(key) || "[]");
+        const updated = list.map(n => ({ ...n, read: true }));
+        localStorage.setItem(key, JSON.stringify(updated));
+        loadAppData();
+        triggerToast("सभी सूचनाएं पढ़ ली गई हैं!");
+      };
+
+      // Add a clean Bazar Listing post
+      const handleAddBazaarListing = (postData) => {
+        if (!user) return;
+        const pList = JSON.parse(localStorage.getItem("bazaar_posts") || "[]");
+        
+        const newPost = {
+          id: "post_" + Math.random().toString(36).slice(2, 9),
+          name: postData.name,
+          price: postData.price,
+          type: postData.type, // Bechna | Kharidna
+          category: postData.category,
+          photo: postData.photo,
+          description: postData.description || "",
+          sellerName: user.naam,
+          sellerRole: user.role,
+          sellerMobile: user.mobile,
+          gaon: user.gaon,
+          timestamp: Date.now()
+        };
+
+        pList.push(newPost);
+        localStorage.setItem("bazaar_posts", JSON.stringify(pList));
+        // Sync to Firebase bazaar_posts node
+        if (dbRef) {
+          const vPath = getCleanVillagePath(user.gaon);
+          dbRef.ref(`bazaar_posts/${vPath}`).push(newPost)
+            .catch(err => console.debug("Bazaar Firebase sync fallback", err));
+        }
+        loadAppData();
+        setShowAddPostModal(false);
+
+        // Notify village of new trading listing
+        const itemTypeHindi = postData.type === "Bechna" ? "बेचने हेतु उपलब्ध" : "खरीदने की मांग";
+        broadcastVillageNotification(
+          user.gaon,
+          `📢 नया बाज़ार पोस्ट! [${itemTypeHindi}]`,
+          `${newPost.name} - ₹${newPost.price} | विक्रेता: ${user.naam}`,
+          "bazaar"
+        );
+
+        triggerToast("आपका सामान बाज़ार में जोड़ दिया गया है!");
+      };
+
+      // Update User Profile info
+      const handleProfileUpdate = (updatedUserFields) => {
+        if (!user) return;
+        const savedUser = JSON.parse(localStorage.getItem("gaon_user"));
+        const updatedUser = { ...savedUser, ...updatedUserFields };
+        
+        // Save to state + localStorage
+        localStorage.setItem("gaon_user", JSON.stringify(updatedUser));
+        setUser(updatedUser);
+
+        // Update in the central list database
+        updateMasterUserDb(user.deviceId, updatedUserFields);
+        triggerToast("प्रोफ़ाइल अपडेट सफलतापूर्वक पूर्ण!");
+      };
+
+      // Safe view redirection wrapper
+      const handleGridNavigation = (target) => {
+        if (target === "sampark") {
+          openOverlay(setShowDirectoryView);
+        } else if (target === "notifications") {
+          openOverlay(setShowNotificationsView);
+        } else if (target === "sos") {
+          setActiveTab("ghar");
+          triggerEmergencySOS();
+        } else {
+          setActiveTab(target);
+        }
+      };
+
+      // View Rendering dispatcher
+      if (!user) {
+        return (
+          <Onboarding 
+            onOnboardComplete={handleOnboardFinish} 
+            triggerToast={triggerToast} 
+            toast={toast}
+          />
+        );
+      }
+
+      return (
+        <div class="flex flex-col w-full flex-grow pb-24 relative min-h-screen">
+          {/* Top Bar Navigation */}
+          <header class="bg-primary text-white p-4 flex items-center justify-between sticky top-0 z-40 rounded-b-2xl shadow-md">
+            <div class="flex items-center space-x-2" onClick={() => { setShowDirectoryView(false); setShowNotificationsView(false); setActiveTab("ghar"); }}>
+              <span class="text-2xl">🏡</span>
+              <h1 class="text-lg font-bold tracking-tight">Gaon Digital</h1>
+            </div>
+            
+            <div class="flex items-center space-x-3">
+              {/* Notification Indicator Bell */}
+              <button 
+                class="relative p-2 focus:outline-none transition active:scale-95 cursor-pointer" 
+                onClick={() => { openOverlay(setShowNotificationsView); setShowDirectoryView(false); }}
+              >
+                <i class="fa-solid fa-bell text-xl"></i>
+                {unreadNotifications > 0 && (
+                  <span class="absolute top-1 right-1 bg-red-600 text-white font-bold text-[10px] rounded-full w-5 h-5 flex items-center justify-center animate-bounce">
+                    {unreadNotifications}
+                  </span>
+                )}
+              </button>
+            </div>
+          </header>
+
+          {/* Toast Notification HUD */}
+          {toast && (
+            <div class={`fixed top-16 left-1/2 -translate-x-1/2 z-50 w-11/12 max-w-sm p-4 rounded-xl shadow-lg border text-sm flex items-center space-x-3 transition duration-300 ${toast.error ? 'bg-red-50 border-red-300 text-red-800' : 'bg-green-50 border-green-300 text-green-800'}`}>
+              <i class={`fa-solid ${toast.error ? "fa-circle-exclamation text-red-500" : "fa-circle-check text-green-500"} text-lg`}></i>
+              <p class="font-medium font-sans flex-1 leading-snug">{toast.text}</p>
+            </div>
+          )}
+
+          {/* Core App View switcher container */}
+          <main class="p-4 flex-grow flex flex-col">
+            {showNotificationsView ? (
+              <NotificationsView 
+                notifications={notifications} 
+                onMarkAllRead={markAllNotificationsRead} 
+                onClose={() => setShowNotificationsView(false)}
+              />
+            ) : showDirectoryView ? (
+              <DirectoryView 
+                allUsers={allUsers} 
+                onClose={() => setShowDirectoryView(false)} 
+              />
+            ) : (
+              <div>
+                {activeTab === "ghar" && (
+                  <HomeView 
+                    user={user} 
+                    onNavigate={handleGridNavigation} 
+                    triggerEmergency={triggerEmergencySOS}
+                  />
+                )}
+                {activeTab === "bazaar" && (
+                  <BazaarView 
+                    allPosts={allPosts} 
+                    user={user} 
+                    onAddPostClick={() => openOverlay(setShowAddPostModal)} 
+                  />
+                )}
+                {activeTab === "chat" && (
+                  <ChatView 
+                    user={user} 
+                    dbRef={dbRef} 
+                    triggerToast={triggerToast}
+                    openOverlay={openOverlay}
+                    broadcastVillage={broadcastVillageNotification}
+                    broadcastGlobal={broadcastGlobalNotification}
+                  />
+                )}
+                {activeTab === "refer" && (
+                  <ReferView 
+                    user={user} 
+                    allUsers={allUsers}
+                    triggerToast={triggerToast} 
+                  />
+                )}
+                {activeTab === "mera" && (
+                  <MeraView 
+                    user={user} 
+                    allPosts={allPosts}
+                    onUpdateProfile={handleProfileUpdate} 
+                    triggerToast={triggerToast}
+                    openOverlay={openOverlay}
+                  />
+                )}
+              </div>
+            )}
+          </main>
+
+          {/* Floating SOS HUD Overlay */}
+          {showSOSAlert && (
+            <div class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+              <div class="bg-white rounded-3xl p-6 text-center shadow-2xl relative w-full border-t-8 border-red-600">
+                <span class="text-6xl animate-bounce block mb-4">🚨</span>
+                <h3 class="text-2xl font-bold text-red-600 font-sans mb-1">आपातकालीन सूचना भेजी गई!</h3>
+                <p class="text-sm text-gray-500 mb-6">आपके गांव <span class="font-semibold text-gray-800">{user.gaon}</span> के सभी निवासियों को आपका आपातकालीन मदद संदेश भेज दिया गया है।</p>
+                
+                <div class="space-y-4 mb-6">
+                  <h4 class="text-sm font-bold text-gray-700 text-left border-b pb-1 font-sans">महत्वपूर्ण हेल्पलाइन नंबर्स:</h4>
+                  <div class="grid grid-cols-2 gap-3">
+                    <a href="tel:108" class="p-3 bg-red-50 text-red-700 rounded-xl flex items-center justify-center font-bold font-sans space-x-2 active:scale-95 transition">
+                      <i class="fa-solid fa-truck-medical"></i><span>एम्बुलेंस (108)</span>
+                    </a>
+                    <a href="tel:100" class="p-3 bg-blue-550 bg-blue-50 text-blue-700 rounded-xl flex items-center justify-center font-bold font-sans space-x-2 active:scale-95 transition">
+                      <i class="fa-solid fa-shield-halved"></i><span>पुलिस (100)</span>
+                    </a>
+                  </div>
+                </div>
+
+                {currentLocation ? (
+                  <button 
+                    onClick={() => {
+                      window.location.href = `https://maps.google.com?q=${currentLocation.lat},${currentLocation.lng}`;
+                    }}
+                    class="w-full p-3.5 bg-green-700 text-white font-bold rounded-xl flex items-center justify-center space-x-2 shadow-lg hover:bg-green-800 transition mb-4 active:scale-95 cursor-pointer"
+                  >
+                    <i class="fa-solid fa-location-dot"></i>
+                    <span>📍 अपना लोकेशन शेयर करें</span>
+                  </button>
+                ) : (
+                  <button 
+                    onClick={() => triggerToast("लोकेशन खोजने का प्रयास कर रहे हैं... अनुमति स्वीकृत करें।")}
+                    class="w-full p-3.5 bg-gray-500 text-white font-bold rounded-xl flex items-center justify-center space-x-2"
+                  >
+                    <span>📍 लोकेशन खोजने में असमर्थ है</span>
+                  </button>
+                )}
+
+                {window._sosAlarmActive && (
+                  <button
+                    onClick={() => { stopEmergencyAlarm(); }}
+                    class="w-full p-3.5 bg-red-700 text-white font-bold rounded-xl flex items-center justify-center space-x-2 mb-3 active:scale-95 transition animate-pulse"
+                  >
+                    🔕 अलार्म बंद करें (Stop Alarm)
+                  </button>
+                )}
+                <button 
+                  onClick={() => { setShowSOSAlert(false); stopEmergencyAlarm(); }} 
+                  class="font-bold underline text-gray-600 px-4 py-2 hover:text-black transition"
+                >
+                  बंद करें (Close)
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Add Post Slideup modal wrapper */}
+          {showAddPostModal && (
+            <AddPostModal 
+              onClose={() => setShowAddPostModal(false)} 
+              onSubmit={handleAddBazaarListing} 
+              triggerToast={triggerToast}
+            />
+          )}
+
+          {/* Gated Administrative Modal Sheet */}
+          {showAdminPanel && (
+            <AdminPanelView 
+              onClose={() => setShowAdminPanel(false)}
+              triggerToast={triggerToast}
+              broadcastGlobal={broadcastGlobalNotification}
+              broadcastVillage={broadcastVillageNotification}
+            />
+          )}
+
+          {/* Bottom Custom Navigation bar */}
+          <nav class="fixed bottom-0 left-1/2 -translate-x-1/2 z-40 max-w-md w-full bg-white border-t border-gray-200 rounded-t-2xl shadow-[0_-4px_12px_rgba(0,0,0,0.06)] px-2 py-2 flex justify-around">
+            {[
+              { id: "ghar", label: "घर", icon: "fa-house" },
+              { id: "bazaar", label: "बाज़ार", icon: "fa-shop" },
+              { id: "chat", label: "शिकायतें", icon: "fa-clipboard-list" },
+              { id: "refer", label: "कमाओ", icon: "fa-gift" },
+              { id: "mera", label: "मेरा", icon: "fa-user" }
+            ].map((tab) => (
+              <button 
+                key={tab.id}
+                onClick={() => {
+                  setShowDirectoryView(false);
+                  setShowNotificationsView(false);
+                  setActiveTab(tab.id);
+                }}
+                class={`flex flex-col items-center justify-center py-2 px-3 rounded-xl transition-all duration-200 ${
+                  (!showDirectoryView && !showNotificationsView && activeTab === tab.id) 
+                    ? "text-primary scale-105 font-bold" 
+                    : "text-gray-400 hover:text-gray-600"
+                }`}
+                style={{ minWidth: "60px", minHeight: "48px" }}
+              >
+                <i class={`fa-solid ${tab.icon} text-lg mb-1`}></i>
+                <span class="text-[11px] font-sans tracking-wide leading-none">{tab.label}</span>
+              </button>
+            ))}
+          </nav>
+        </div>
+      );
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Onboarding Subscreen component
+    // ──────────────────────────────────────────────────────────
+    function Onboarding({ onOnboardComplete, triggerToast, toast }) {
+      const [name, setName] = useState("");
+      const [village, setVillage] = useState("");
+      const [mobile, setMobile] = useState("");
+      const [role, setRole] = useState("");
+      const [photo, setPhoto] = useState("");
+      const [referralCodeInput, setReferralCodeInput] = useState("");
+
+      const handlePhotoSelect = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        compressAndLoadPhoto(file, (compressedBase64) => {
+          setPhoto(compressedBase64);
+        });
+      };
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        if (!name.trim()) return triggerToast("कृपया अपना नाम लिखें!");
+        if (!village) return triggerToast("कृपया अपने गांव का चयन करें!");
+        if (!mobile || mobile.length !== 10 || isNaN(mobile)) {
+          return triggerToast("कृपया 10 अंकों का मान्य मोबाइल नंबर दर्ज करें!", true);
+        }
+        if (!role) return triggerToast("कृपया अपने कार्य / रोल का चयन करें!");
+
+        onOnboardComplete({
+          naam: name.trim(),
+          gaon: village,
+          mobile: mobile.trim(),
+          role: role,
+          photo: photo,
+          referralCodeInput: referralCodeInput.trim()
+        });
+      };
+
+      return (
+        <div class="flex-grow p-6 flex flex-col justify-center bg-gradient-to-b from-[#E8F5E9] via-bgLight to-[#FFFFFF] min-h-screen">
+          <div class="text-center mb-6">
+            <span class="text-6xl mb-3 block">🏡</span>
+            <h2 class="text-3xl font-extrabold text-primary font-sans">Gaon Digital</h2>
+            <p class="text-sm text-gray-600 font-sans mt-1">अपना गाँव, अपनी डिजिटल चौपाल</p>
+          </div>
+
+          {toast && (
+            <div class={`mb-4 w-full p-4 rounded-xl shadow-lg border text-sm flex items-center space-x-3 transition duration-300 ${toast.error ? 'bg-red-50 border-red-300 text-red-800' : 'bg-green-50 border-green-300 text-green-800'}`}>
+              <i class={`fa-solid ${toast.error ? "fa-circle-exclamation text-red-500" : "fa-circle-check text-green-500"} text-lg`}></i>
+              <p class="font-medium font-sans flex-grow">{toast.text}</p>
+            </div>
+          )}
+
+          <div class="bg-white rounded-3xl p-6 shadow-xl border border-gray-150 animate-fadeIn">
+            <h3 class="text-lg font-bold text-gray-800 text-center mb-4 pb-2 border-b font-sans">
+              📍 एक बार का निःशुल्क रजिस्ट्रेशन
+            </h3>
+
+            <form onSubmit={handleSubmit} class="space-y-4">
+              <div>
+                <label class="block text-xs font-bold text-gray-700 mb-1 font-sans">आपका पूरा नाम (Naam) *</label>
+                <div class="relative">
+                  <i class="fa-solid fa-user absolute left-3 top-3.5 text-gray-400"></i>
+                  <input 
+                    type="text" 
+                    placeholder="जैसे: हरीश पटेल"
+                    value={name} 
+                    onChange={e => setName(e.target.value)}
+                    class="w-full pl-9 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:border-primary focus:bg-white focus:outline-none transition text-sm font-sans"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-gray-700 mb-1 font-sans">अपना गाँव चुनें (Village) *</label>
+                <div class="relative">
+                  <i class="fa-solid fa-map-pin absolute left-3 top-3.5 text-gray-400"></i>
+                  <select 
+                    value={village} 
+                    onChange={e => setVillage(e.target.value)}
+                    class="w-full pl-9 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:border-primary focus:bg-white focus:outline-none transition appearance-none text-sm font-sans"
+                    required
+                  >
+                    <option value="">--गाँव चुनें--</option>
+                    {VILLAGES.map(v => <option key={v} value={v}>{v}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-gray-700 mb-1 font-sans">मोबाइल नंबर (10 अंकों का) *</label>
+                <div class="relative">
+                  <i class="fa-solid fa-phone absolute left-3 top-3.5 text-gray-400"></i>
+                  <input 
+                    type="tel" 
+                    maxLength="10" 
+                    placeholder="जैसे: 9876543210"
+                    value={mobile} 
+                    onChange={e => setMobile(e.target.value.replace(/\D/g, ""))}
+                    class="w-full pl-9 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:border-primary focus:bg-white focus:outline-none transition text-sm font-sans"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-gray-700 mb-1 font-sans">आप क्या काम करते हैं (Role) *</label>
+                <div class="relative">
+                  <i class="fa-solid fa-briefcase absolute left-3 top-3.5 text-gray-400"></i>
+                  <select 
+                    value={role} 
+                    onChange={e => setRole(e.target.value)}
+                    class="w-full pl-9 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:border-primary focus:bg-white focus:outline-none transition appearance-none text-sm font-sans"
+                    required
+                  >
+                    <option value="">--अपना कार्य चुनें--</option>
+                    {ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-gray-700 mb-1 font-sans">रेफरल कोड (Referral Code - वैकल्पिक)</label>
+                <div class="relative">
+                  <i class="fa-solid fa-gift absolute left-3 top-3.5 text-gray-400"></i>
+                  <input 
+                    type="text" 
+                    placeholder="जैसे: ABCDEFGH"
+                    value={referralCodeInput} 
+                    onChange={e => setReferralCodeInput(e.target.value.toUpperCase())}
+                    class="w-full pl-9 pr-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:border-primary focus:bg-white focus:outline-none transition text-sm font-sans"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-xs font-bold text-gray-700 mb-1 font-sans">प्रोफ़ाइल फ़ोटो (Profile Photo - वैकल्पिक)</label>
+                <div class="mt-1 flex items-center space-x-3">
+                  {photo ? (
+                    <img src={photo} class="w-14 h-14 rounded-full object-cover border-2 border-primary" alt="Profile" />
+                  ) : (
+                    <div class="w-14 h-14 bg-gray-100 rounded-full flex items-center justify-center border border-dashed border-gray-300">
+                      <i class="fa-solid fa-camera text-gray-400 text-lg"></i>
+                    </div>
+                  )}
+                  <label class="px-4 py-2 bg-gray-100 border border-gray-300 hover:bg-gray-200 rounded-xl cursor-pointer text-xs font-bold transition font-sans">
+                    अपलोड करें
+                    <input type="file" accept="image/*" class="hidden" onChange={handlePhotoSelect} />
+                  </label>
+                  {photo && (
+                    <button type="button" onClick={() => setPhoto("")} class="text-red-500 font-bold text-xs underline">हटाएं</button>
+                  )}
+                </div>
+              </div>
+
+              <button 
+                type="submit" 
+                class="w-full py-3.5 bg-primary hover:bg-green-800 text-white font-bold rounded-xl shadow-lg transition duration-200 flex items-center justify-center space-x-2 text-base active:scale-95 font-sans"
+              >
+                <span>रजिस्टर करें 🇮🇳</span>
+              </button>
+            </form>
+
+            <div class="text-center text-[10px] text-gray-400 mt-6 font-sans">
+              Developed by <span class="font-extrabold text-gray-500">amrritxd</span>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Ghar / Home Tab Dashboard View
+    // ──────────────────────────────────────────────────────────
+    function HomeView({ user, onNavigate, triggerEmergency }) {
+      const [showSOSConfirm, setShowSOSConfirm] = useState(false);
+
+      return (
+        <div class="space-y-4 animate-fadeIn">
+          {/* Personalised Welcome Greeting Card */}
+          <div class="bg-gradient-to-r from-primary to-green-700 text-white p-5 rounded-3xl shadow-lg relative overflow-hidden">
+            <div class="relative z-10">
+              <span class="bg-white/20 text-xs px-3 py-1 rounded-full font-sans font-bold inline-block mb-2">
+                📍 {user.gaon}
+              </span>
+              <h2 class="text-2xl font-extrabold font-sans leading-tight">नमस्ते, {user.naam}! 🙏</h2>
+              <p class="text-xs text-green-100 font-sans mt-1">आप {ROLES.find(r => r.id === user.role)?.label || "ग्रामीण"} के रूप में जुड़े हुए हैं।</p>
+            </div>
+            {/* Ambient watermarks */}
+            <span class="absolute -right-6 -bottom-6 text-9xl text-white/5 pointer-events-none rotate-12">🏡</span>
+          </div>
+
+          {/* Large SOS Emergency CTA Button */}
+          <div class="bg-red-50 border border-red-200 p-4 rounded-3xl text-center space-y-3">
+            <h3 class="text-sm font-bold text-red-800 font-sans">🚨 त्वरित संकट सहायता सेवा</h3>
+            <button 
+              onClick={() => setShowSOSConfirm(true)}
+              class="w-24 h-24 bg-red-600 text-white rounded-full font-bold shadow-lg transition active:scale-95 text-xl tracking-wider inline-flex items-center justify-center border-4 border-white outline-none sos-pulse font-sans shadow-red-300"
+            >
+              SOS
+            </button>
+            <p class="text-xs text-red-600 font-medium">मुसीबत में मदद बुलाने के लिए इसे दबाएं</p>
+          </div>
+
+          {/* Quick interactive utility 6 Grid Buttons */}
+          <div>
+            <h3 class="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 font-sans pl-1">गाँव की मुख्य सेवाऐं</h3>
+            <div class="grid grid-cols-2 gap-3">
+              {[
+                { id: "bazaar", title: "📢 बाज़ार चौपाल", desc: "खरीदें और बेचें", bg: "bg-orange-50 border-orange-200 text-orange-850", icon: "fa-store text-orange-600" },
+                { id: "sampark", title: "📋 संपर्क सूची", desc: "पूरा गाँव डायरेक्टरी", bg: "bg-blue-50 border-blue-200 text-blue-850", icon: "fa-address-book text-blue-600" },
+                { id: "sos", title: "🚨 इमरजेंसी", desc: "तुरंत मदद मंगाएं", bg: "bg-red-50 border-red-200 text-red-850", icon: "fa-triangle-exclamation text-red-600" },
+                { id: "chat", title: "📋 गाँव की शिकायतें", desc: "बिजली, पानी, सड़क समस्या दर्ज करें", bg: "bg-red-50 border-red-200 text-red-850", icon: "fa-clipboard-list text-red-600" },
+                { id: "refer", title: "👥 रेफ़र & कमाओ", desc: "रोजगार और इनाम", bg: "bg-purple-50 border-purple-200 text-purple-850", icon: "fa-gift text-purple-600" },
+                { id: "notifications", title: "🔔 सूचनाएं देखें", desc: "गांव की घोषणाएं", bg: "bg-teal-50 border-teal-200 text-teal-850", icon: "fa-bell text-teal-600" }
+              ].map((gridItem) => (
+                <button
+                  key={gridItem.id}
+                  onClick={() => onNavigate(gridItem.id)}
+                  class={`p-4 border rounded-2xl flex flex-col items-start text-left space-y-1.5 transition duration-200 active:scale-98 ${gridItem.bg} hover:shadow-md h-[100px] justify-between`}
+                >
+                  <i class={`fa-solid ${gridItem.icon} text-2xl`}></i>
+                  <div>
+                    <h4 class="text-[13px] font-bold leading-tight font-sans text-gray-800">{gridItem.title}</h4>
+                    <p class="text-[10px] text-gray-500 font-sans font-medium">{gridItem.desc}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* SOS Gated Validation Dialog */}
+          {showSOSConfirm && (
+            <div class="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+              <div class="bg-white rounded-3xl p-6 text-center max-w-sm w-full shadow-2xl border-2 border-red-100">
+                <span class="text-4xl block mb-2">⚠️</span>
+                <h4 class="text-xl font-bold font-sans text-red-700">क्या आपको सच में मदद चाहिए?</h4>
+                <p class="text-xs text-gray-500 font-sans mt-2 mb-6">हाँ दबाने पर आपके गाँव के सभी लोगों के पास नाम और नंबर के साथ मदद और चेतावनी चली जाएगी।</p>
+                
+                <div class="flex flex-col space-y-3">
+                  <button 
+                    onClick={() => { setShowSOSConfirm(false); triggerEmergency(); }} 
+                    class="p-3.5 bg-red-600 text-white font-bold rounded-xl shadow-lg hover:bg-red-700 active:scale-95 transition text-sm font-sans"
+                  >
+                    हाँ, मदद चाहिए! 🚨
+                  </button>
+                  <button 
+                    onClick={() => setShowSOSConfirm(false)} 
+                    class="p-3 bg-gray-100 text-gray-700 hover:bg-gray-200 rounded-xl font-bold text-sm transition font-sans"
+                  >
+                    नहीं, रद्द करें (Cancel)
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Bazaar Buyer/Seller Board Tab
+    // ──────────────────────────────────────────────────────────
+    function BazaarView({ allPosts, user, onAddPostClick }) {
+      const [selectedFilter, setSelectedFilter] = useState("All"); // All | Bechna | Kharidna
+      const [selectedCategory, setSelectedCategory] = useState("All");
+
+      // Filter logic (Same-village constraints applies)
+      const villagePosts = allPosts.filter(p => p.gaon === user.gaon);
+      
+      const filteredPosts = villagePosts.filter(p => {
+        const matchesType = selectedFilter === "All" ? true : p.type === selectedFilter;
+        const matchesCat = selectedCategory === "All" ? true : p.category === selectedCategory;
+        return matchesType && matchesCat;
+      });
+
+      return (
+        <div class="space-y-4 animate-fadeIn flex flex-col flex-grow relative pb-24">
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="text-xl font-extrabold text-[#2E7D32] font-sans">🌾 स्थानीय बाज़ार (Bazaar)</h2>
+              <p class="text-[10px] text-gray-500 font-sans font-medium">गाँव <span class="text-primary font-bold">{user.gaon}</span> में उपलब्ध सामानों की सूची</p>
+            </div>
+            <button 
+              onClick={() => onAddPostClick()}
+              class="px-3.5 py-1.5 bg-accent hover:bg-orange-600 text-white font-bold rounded-xl shadow-md transition text-xs flex items-center space-x-1 active:scale-95 font-sans"
+            >
+              <i class="fa-solid fa-plus text-xs"></i><span>नया पोस्ट</span>
+            </button>
+          </div>
+
+          {/* Filter Bar */}
+          <div class="space-y-2">
+            {/* Filter 1: Type Bechna/Kharidna */}
+            <div class="flex bg-white p-1 rounded-xl border border-gray-150 gap-1 text-xs">
+              {[
+                { id: "All", label: "📋 सब देखें" },
+                { id: "Bechna", label: "Selling (बेचना है)" },
+                { id: "Kharidna", label: "Buying (खरीदना है)" }
+              ].map(f => (
+                <button
+                  key={f.id}
+                  onClick={() => setSelectedFilter(f.id)}
+                  class={`flex-1 py-2 rounded-lg font-bold text-center transition ${selectedFilter === f.id ? "bg-primary text-white" : "text-gray-600"}`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Filter 2: Scrollable category list */}
+            <div class="flex overflow-x-auto space-x-2 pb-1 text-xs no-scrollbar">
+              <button
+                onClick={() => setSelectedCategory("All")}
+                class={`px-3 py-1.5 rounded-full font-medium whitespace-nowrap transition ${selectedCategory === "All" ? "bg-accent text-white" : "bg-white text-gray-600 border"}`}
+              >
+                सभी सामान
+              </button>
+              {BAZAAR_CATEGORIES.map(cat => (
+                <button
+                  key={cat}
+                  onClick={() => setSelectedCategory(cat)}
+                  class={`px-3 py-1.5 rounded-full font-medium whitespace-nowrap transition ${selectedCategory === cat ? "bg-accent text-white" : "bg-white text-gray-600 border"}`}
+                >
+                  {BAZAAR_CATEGORIES_LABELS[cat] || cat}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Listing Grid */}
+          <div class="space-y-3 flex-grow">
+            {filteredPosts.length === 0 ? (
+              <div class="bg-white rounded-3xl p-8 text-center text-gray-400 border border-dashed flex flex-col items-center justify-center shadow-xs">
+                <span class="text-4xl mb-2">📦</span>
+                <p class="text-sm font-sans">इस केटेगरी में कोई पोस्ट नहीं मिला।</p>
+                <p class="text-[10px] text-gray-400">आप अपने पहले सामान का पोस्ट बना सकते हैं!</p>
+              </div>
+            ) : (
+              filteredPosts.map((post) => (
+                <div key={post.id} class="bg-white rounded-3xl overflow-hidden border border-gray-100 shadow-sm flex flex-col">
+                  <div class="flex p-3 gap-3">
+                    {/* Item picture uploaded */}
+                    <div class="w-24 h-24 rounded-2xl bg-gray-50 flex-shrink-0 border overflow-hidden relative">
+                      <img src={post.photo} class="w-full h-full object-cover" alt="Product" />
+                      <span class={`absolute top-1 left-1.5 px-2 py-0.5 rounded-full text-[9px] font-bold text-white shadow-xs ${post.type === 'Bechna' ? 'bg-orange-600' : 'bg-blue-600'}`}>
+                        {post.type === 'Bechna' ? 'बेचना' : 'खरीदना'}
+                      </span>
+                    </div>
+
+                    {/* Meta description specs */}
+                    <div class="flex-1 flex flex-col justify-between text-xs">
+                      <div>
+                        <div class="flex items-center justify-between">
+                          <span class="text-[10px] text-gray-400 font-bold tracking-wider">{BAZAAR_CATEGORIES_LABELS[post.category]}</span>
+                          <span class="text-[9px] text-gray-400">{new Date(post.timestamp).toLocaleDateString("hi") || "आज"}</span>
+                        </div>
+                        <h4 class="text-sm font-extrabold text-gray-900 leading-tight mt-0.5 font-sans">{post.name}</h4>
+                        <div class="text-primary font-bold text-sm mt-1 font-sans">₹{post.price}</div>
+                        {post.description && (
+                          <p class="text-[11px] text-gray-500 font-sans mt-1 line-clamp-2 leading-relaxed">{post.description}</p>
+                        )}
+                      </div>
+
+                      {/* Owner credentials card */}
+                      <div class="flex items-center space-x-1.5 mt-2 bg-gray-50 p-1.5 rounded-lg border border-gray-150">
+                        <div class="w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-[10px] text-primary font-bold">
+                          {post.sellerName[0]}
+                        </div>
+                        <div class="leading-none flex-1">
+                          <p class="text-[10px] font-bold text-gray-800">{post.sellerName}</p>
+                          <p class="text-[8px] text-gray-400 font-medium">💼 {post.sellerRole}</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Calling and detail interactions */}
+                  <div class="bg-gray-50 p-2.5 border-t border-gray-100 flex gap-2">
+                    <a 
+                      href={`tel:${post.sellerMobile}`} 
+                      class="flex-1 py-2.5 bg-primary hover:bg-green-800 text-white font-bold rounded-xl text-center flex items-center justify-center space-x-1.5 active:scale-95 transition shadow-xs text-xs font-sans"
+                    >
+                      <i class="fa-solid fa-phone"></i>
+                      <span>📞 सम्पर्क करो</span>
+                    </a>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Add Post Modals Component overlays
+    // ──────────────────────────────────────────────────────────
+    function AddPostModal({ onClose, onSubmit, triggerToast }) {
+      const [name, setName] = useState("");
+      const [price, setPrice] = useState("");
+      const [type, setType] = useState("Bechna");
+      const [category, setCategory] = useState("Anaj");
+      const [photo, setPhoto] = useState("");
+      const [desc, setDesc] = useState("");
+
+      const handlePhotoSelect = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        compressAndLoadPhoto(file, (compressedBase64) => {
+          setPhoto(compressedBase64);
+        });
+      };
+
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        if (!photo) return triggerToast("कृपया सामान की फ़ोटो अपलोड करें (यह अनिवार्य है)!", true);
+        if (!name.trim()) return triggerToast("सामान का नाम दर्ज करें!");
+        if (!price || isNaN(price)) return triggerToast("मान्य मूल्य दर्ज करें!");
+
+        onSubmit({
+          name: name.trim(),
+          price: price.trim(),
+          type,
+          category,
+          photo,
+          description: desc.trim()
+        });
+      };
+
+      return (
+        <div class="fixed inset-0 bg-white z-50 flex flex-col p-4 overflow-y-auto animate-slideUp text-left h-full">
+          <div class="flex items-center justify-between border-b pb-3 mb-4">
+            <h3 class="text-base font-extrabold text-[#2E7D32] font-sans">🆕 नया सामान बाज़ार में जोड़ें</h3>
+            <button onClick={onClose} class="p-2 px-4 bg-gray-100 font-bold rounded-xl text-xs hover:bg-gray-200 transition font-sans cursor-pointer">
+              रद्द करें (Cancel)
+            </button>
+          </div>
+
+            <form onSubmit={handleSubmit} class="space-y-4 text-xs font-sans">
+              <div class="grid grid-cols-2 gap-2 bg-gray-50 p-1 rounded-xl border">
+                <button
+                  type="button"
+                  onClick={() => setType("Bechna")}
+                  class={`py-2 text-center rounded-lg font-bold transition ${type === "Bechna" ? "bg-orange-600 text-white" : "text-gray-600"}`}
+                >
+                  भेजना है (Sell)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setType("Kharidna")}
+                  class={`py-2 text-center rounded-lg font-bold transition ${type === "Kharidna" ? "bg-blue-600 text-white" : "text-gray-600"}`}
+                >
+                  खरीदना है (Buy)
+                </button>
+              </div>
+
+              {/* Photo Input (Mandatory constraint verified) */}
+              <div>
+                <label class="block font-bold text-gray-700 mb-1">सामान की फ़ोटो * (अनिवार्य / Category Photo)</label>
+                <div class="mt-1 flex items-center space-x-3 bg-orange-50/50 p-3 rounded-2xl border-2 border-dashed border-orange-300">
+                  {photo ? (
+                    <img src={photo} class="w-20 h-20 rounded-xl object-contain border bg-white" alt="Thumbnail" />
+                  ) : (
+                    <div class="w-20 h-20 bg-gray-100 rounded-xl flex flex-col items-center justify-center text-gray-400">
+                      <i class="fa-solid fa-image text-2xl"></i>
+                      <span class="text-[8px] mt-1 text-red-500 font-bold">फ़ोटो आवश्यक!</span>
+                    </div>
+                  )}
+                  <div class="flex-1">
+                    <label class="px-4 py-2.5 bg-orange-600 hover:bg-orange-700 text-white font-bold rounded-xl cursor-pointer inline-block shadow-xs transition">
+                      <i class="fa-solid fa-upload mr-1"></i> अपलोड फ़ोटो
+                      <input type="file" accept="image/*" class="hidden" onChange={handlePhotoSelect} required />
+                    </label>
+                    <p class="text-[9px] text-gray-400 mt-1">अपने कृषि उत्पाद या सामान की स्पष्ट तस्वीर अपलोड करें</p>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label class="block font-bold text-gray-700 mb-1">सामान का नाम (Product Name) *</label>
+                <input 
+                  type="text" 
+                  placeholder="जैसे: सुधरा हुआ चारा कटर / रोटावेटर मशीन"
+                  value={name} 
+                  onChange={e => setName(e.target.value)}
+                  class="w-full p-3 bg-gray-50 border rounded-xl focus:border-primary focus:bg-white focus:outline-none"
+                  required
+                />
+              </div>
+
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="block font-bold text-gray-700 mb-1">कीमत (₹) *</label>
+                  <input 
+                    type="number" 
+                    placeholder="जैसे: 1500"
+                    value={price} 
+                    onChange={e => setPrice(e.target.value)}
+                    class="w-full p-3 bg-gray-50 border rounded-xl focus:border-primary focus:bg-white focus:outline-none font-bold"
+                    required
+                  />
+                </div>
+                <div>
+                  <label class="block font-bold text-gray-700 mb-1">केटेगरी *</label>
+                  <select 
+                    value={category} 
+                    onChange={e => setCategory(e.target.value)}
+                    class="w-full p-3 bg-gray-50 border rounded-xl focus:border-primary focus:bg-white focus:outline-none appearance-none font-bold"
+                    required
+                  >
+                    {BAZAAR_CATEGORIES.map(cat => (
+                      <option key={cat} value={cat}>{BAZAAR_CATEGORIES_LABELS[cat]}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label class="block font-bold text-gray-700 mb-1">संक्षिप्त विवरण (Short Details - वैकल्पिक)</label>
+                <textarea 
+                  rows="2" 
+                  placeholder="सामान की स्थिति या काम के बारे में संक्षेप में विवरण दें..."
+                  value={desc} 
+                  onChange={e => setDesc(e.target.value)}
+                  class="w-full p-3 bg-gray-50 border rounded-xl focus:border-primary focus:bg-white focus:outline-none resize-none"
+                ></textarea>
+              </div>
+
+              <button 
+                type="submit" 
+                class="w-full py-3.5 bg-primary hover:bg-green-800 text-white font-bold rounded-xl text-sm transition shadow-lg flex items-center justify-center space-x-1 active:scale-95"
+              >
+                <span>🚀 बाज़ार में पब्लिश करें</span>
+              </button>
+              
+              {/* Keyboard clearance spacing buffer so input elements do not stay hidden under software keyboard */}
+              <div class="h-32"></div>
+            </form>
+          </div>
+      );
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Sampark Suchi Directory Component overlay
+    // ──────────────────────────────────────────────────────────
+    function DirectoryView({ allUsers, onClose }) {
+      const [searchTerm, setSearchTerm] = useState("");
+      const [selectedFilter, setSelectedFilter] = useState("All");
+
+      // Sort and Gating logic for the Directory (Doctor role sorting first)
+      const sortedUsers = [...allUsers].sort((a,b) => {
+        if (a.role === "Doctor" && b.role !== "Doctor") return -1;
+        if (a.role !== "Doctor" && b.role === "Doctor") return 1;
+        return a.name?.localeCompare(b.name);
+      });
+
+      const filtered = sortedUsers.filter(u => {
+        const matchesSearch = u.name?.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                              u.role?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+                              u.gaon?.toLowerCase().includes(searchTerm.toLowerCase());
+        const matchesRole = selectedFilter === "All" ? true : u.role === selectedFilter;
+        return matchesSearch && matchesRole;
+      });
+
+      return (
+        <div class="fixed inset-0 bg-bgLight z-40 max-w-md w-full mx-auto flex flex-col p-4 animate-fadeIn pb-24">
+          <div class="flex items-center justify-between border-b pb-3 mb-3">
+            <div>
+              <h2 class="text-xl font-extrabold text-[#2E7D32] font-sans">📋 गाँव संपर्क सूची (Directory)</h2>
+              <p class="text-[10px] text-gray-500 font-sans font-medium">सभी गांवों के नागरिकों और डॉक्टरों की जानकारी</p>
+            </div>
+            <button onClick={onClose} class="p-2 px-3 bg-white text-gray-600 rounded-xl hover:bg-gray-200 font-bold border">
+              बंद करें (Close)
+            </button>
+          </div>
+
+          <div class="space-y-3 mb-3">
+            {/* Search Input bar */}
+            <div class="relative">
+              <i class="fa-solid fa-magnifying-glass absolute left-3 top-3.5 text-gray-400 text-sm"></i>
+              <input 
+                type="text" 
+                placeholder="नाम, काम या गांव लिखकर ढूंढें..."
+                value={searchTerm} 
+                onChange={e => setSearchTerm(e.target.value)}
+                class="w-full pl-9 pr-4 py-3 bg-white border border-gray-200 rounded-xl focus:border-primary focus:outline-none text-xs font-sans shadow-xs"
+              />
+            </div>
+
+            {/* Role Filter pills */}
+            <div class="flex overflow-x-auto space-x-2 pb-1 text-[10px] no-scrollbar">
+              <button 
+                onClick={() => setSelectedFilter("All")}
+                class={`px-3.5 py-1.5 rounded-full font-bold whitespace-nowrap border transition ${selectedFilter === "All" ? "bg-primary text-white" : "bg-white text-gray-600"}`}
+              >
+                सभी संपर्क
+              </button>
+              {ROLES.map(role => (
+                <button
+                  key={role.id}
+                  onClick={() => setSelectedFilter(role.id)}
+                  class={`px-3.5 py-1.5 rounded-full font-bold whitespace-nowrap border transition ${selectedFilter === role.id ? "bg-primary text-white" : "bg-white text-gray-600"}`}
+                >
+                  {role.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* directory lists scroll view Container */}
+          <div class="flex-grow overflow-y-auto space-y-3 no-scrollbar pr-1 pb-4">
+            {filtered.length === 0 ? (
+              <div class="text-center bg-white rounded-3xl p-8 text-gray-400 text-xs border font-sans">
+                🔍 कोई संपर्क नहीं मिला।
+              </div>
+            ) : (
+              filtered.map((userCard) => (
+                <div key={userCard.deviceId} class="bg-white rounded-2xl p-3 border border-gray-100 shadow-xs flex items-center justify-between">
+                  {/* Left profile data info */}
+                  <div class="flex items-center space-x-3">
+                    {userCard.photo ? (
+                      <img src={userCard.photo} class="w-12 h-12 rounded-full object-cover border-2 border-primary" alt="Profile" />
+                    ) : (
+                      <div class="w-12 h-12 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center text-lg">
+                        {userCard.naam ? userCard.naam[0] : "👤"}
+                      </div>
+                    )}
+                    <div class="leading-snug">
+                      <div class="flex items-center space-x-1.5">
+                        <h4 class="text-xs font-bold text-gray-800 font-sans">{userCard.naam}</h4>
+                        <span class={`px-2 py-0.2 px-1.5 rounded-lg text-[9px] font-bold ${userCard.role === "Doctor" ? "bg-red-100 text-red-700 border border-red-200" : "bg-green-100 text-green-700 border border-green-200"}`}>
+                          {ROLES.find(r => r.id === userCard.role)?.label || userCard.role}
+                        </span>
+                      </div>
+                      <p class="text-[9px] text-gray-400 mt-0.5 font-sans"><i class="fa-solid fa-map-pin mr-1 text-gray-400"></i>📍 {userCard.gaon}</p>
+                    </div>
+                  </div>
+
+                  {/* Call Button Trigger */}
+                  <a 
+                    href={`tel:${userCard.mobile}`}
+                    class="p-2.5 bg-primary hover:bg-green-800 text-white rounded-xl transition shadow-xs flex items-center justify-center active:scale-95"
+                    style={{ minWidth: "44px", minHeight: "44px" }}
+                  >
+                    <i class="fa-solid fa-phone text-xs"></i>
+                  </a>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Panchayat Grievance & Village News Bulletin Board (ChatView)
+    // ──────────────────────────────────────────────────────────
+    function ChatView({ user, dbRef, triggerToast, openOverlay }) {
+      const [subTab, setSubTab] = useState("complaints"); // complaints | news
+      const [complaints, setComplaints] = useState([]);
+      const [newsList, setNewsList] = useState([]);
+
+      // Form States for adding a Complaint
+      const [showAddComplaint, setShowAddComplaint] = useState(false);
+      const [compTitle, setCompTitle] = useState("");
+      const [compDesc, setCompDesc] = useState("");
+      const [compCategory, setCompCategory] = useState("sarak");
+      const [compPhoto, setCompPhoto] = useState("");
+
+      // Form States for sharing local News
+      const [showAddNews, setShowAddNews] = useState(false);
+      const [newsTitle, setNewsTitle] = useState("");
+      const [newsDetails, setNewsDetails] = useState("");
+      const [newsCategory, setNewsCategory] = useState("Khabar");
+      const [newsPhoto, setNewsPhoto] = useState("");
+
+      // Comments View States
+      const [selectedItemForComments, setSelectedItemForComments] = useState(null);
+      const [selectedItemType, setSelectedItemType] = useState(""); // "complaint" | "news"
+
+      const villageKey = getCleanVillagePath(user.gaon);
+
+      const COMP_CATEGORIES = {
+        sarak: "🚧 टूटी सड़क (Road)",
+        bijli: "💡 बिजली व लाइट (Electricity)",
+        paani: "💧 पेयजल व पानी (Water)",
+        safai: "🧹 गाँव साफ-सफाई (Sanitation)",
+        any: "📦 अन्य समस्या (Others)"
+      };
+
+      const NEWS_CATEGORIES = {
+        Khabar: "📰 गाँव समाचार (Local News)",
+        Mausam: "☁️ मौसम जानकारी (Weather Update)",
+        Krishi: "🌾 कृषि जानकारी (Agri Bulletin)",
+        Panchayat: "👑 सरकारी सूचना (Govt Directive)"
+      };
+
+      // Connect to Firebase and listen to both resources
+      useEffect(() => {
+        // --- 1. COMPLAINTS LISTENER ---
+        const compRef = dbRef ? dbRef.ref(`complaints/${villageKey}`) : null;
+        if (compRef) {
+          compRef.on("value", (snapshot) => {
+            const data = snapshot.val();
+            const list = [];
+            if (data) {
+              Object.keys(data).forEach((k) => {
+                list.push({ id: k, ...data[k] });
+              });
+            }
+            // Sort new complaints first
+            setComplaints(list.sort((a, b) => b.timestamp - a.timestamp));
+          });
+        } else {
+          // Backup offline cached fallback
+          const local = JSON.parse(localStorage.getItem(`offline_complaints_${villageKey}`) || "[]");
+          setComplaints(local);
+        }
+
+        // --- 2. NEWS BULLETIN LISTENER ---
+        const newsRef = dbRef ? dbRef.ref(`news/${villageKey}`) : null;
+        if (newsRef) {
+          newsRef.on("value", (snapshot) => {
+            const data = snapshot.val();
+            const list = [];
+            if (data) {
+              Object.keys(data).forEach((k) => {
+                list.push({ id: k, ...data[k] });
+              });
+            }
+            setNewsList(list.sort((a, b) => b.timestamp - a.timestamp));
+          });
+        } else {
+          // Backup offline cached fallback
+          const local = JSON.parse(localStorage.getItem(`offline_news_${villageKey}`) || "[]");
+          setNewsList(local);
+        }
+
+        return () => {
+          if (compRef) compRef.off();
+          if (newsRef) newsRef.off();
+        };
+      }, [villageKey, dbRef]);
+
+      // Handle Adding new Complaint
+      const handleCreateComplaint = (e) => {
+        e.preventDefault();
+        if (!compTitle.trim() || !compDesc.trim()) {
+          triggerToast("सभी अनिवार्य क्षेत्रों को पूरा करें!");
+          return;
+        }
+
+        const newComp = {
+          title: compTitle.trim(),
+          description: compDesc.trim(),
+          category: compCategory,
+          photo: compPhoto,
+          status: "Pending", // Pending, In-Progress, Resolved
+          senderName: user.naam,
+          senderMobile: user.mobile,
+          role: user.role,
+          timestamp: Date.now(),
+          upvotes: {}, // maps deviceId -> true
+          upvoteCount: 0
+        };
+
+        if (dbRef) {
+          dbRef.ref(`complaints/${villageKey}`).push(newComp)
+            .then(() => {
+              setCompTitle("");
+              setCompDesc("");
+              setCompPhoto("");
+              setShowAddComplaint(false);
+              triggerToast("📝 शिकायत सफलतापूर्वक दर्ज की गई!");
+            })
+            .catch((err) => {
+              console.error(err);
+              triggerToast("दर्ज करने में कुछ समस्या आई!", true);
+            });
+        } else {
+          // Local fallback
+          const key = `offline_complaints_${villageKey}`;
+          const current = JSON.parse(localStorage.getItem(key) || "[]");
+          newComp.id = "local_comp_" + Date.now();
+          current.unshift(newComp);
+          localStorage.setItem(key, JSON.stringify(current));
+          setComplaints(current);
+          
+          setCompTitle("");
+          setCompDesc("");
+          setCompPhoto("");
+          setShowAddComplaint(false);
+          triggerToast("ऑफलाइन मोड: शिकायत सहेजी गई! 💾");
+        }
+      };
+
+      // Handle Adding local News
+      const handleCreateNews = (e) => {
+        e.preventDefault();
+        if (!newsTitle.trim() || !newsDetails.trim()) {
+          triggerToast("समाचार का शीर्षक और विवरण लिखें!");
+          return;
+        }
+
+        const newBulletin = {
+          title: newsTitle.trim(),
+          details: newsDetails.trim(),
+          category: newsCategory,
+          photo: newsPhoto,
+          authorName: user.naam,
+          authorRole: user.role,
+          timestamp: Date.now()
+        };
+
+        if (dbRef) {
+          dbRef.ref(`news/${villageKey}`).push(newBulletin)
+            .then(() => {
+              setNewsTitle("");
+              setNewsDetails("");
+              setNewsPhoto("");
+              setShowAddNews(false);
+              triggerToast("📰 गाँव समाचार साझा किया गया!");
+            })
+            .catch((err) => {
+              console.error(err);
+              triggerToast("साझा करने में कुछ समस्या आई!", true);
+            });
+        } else {
+          // Local fallback
+          const key = `offline_news_${villageKey}`;
+          const current = JSON.parse(localStorage.getItem(key) || "[]");
+          newBulletin.id = "local_news_" + Date.now();
+          current.unshift(newBulletin);
+          localStorage.setItem(key, JSON.stringify(current));
+          setNewsList(current);
+
+          setNewsTitle("");
+          setNewsDetails("");
+          setNewsPhoto("");
+          setShowAddNews(false);
+          triggerToast("ऑफलाइन मोड: समाचार सहेजा गया! 💾");
+        }
+      };
+
+      // Upvote/Downvote complaint
+      const handleUpvote = (compItem) => {
+        const votes = compItem.upvotes || {};
+        const isUpvoted = !!votes[user.deviceId];
+        const newVotes = { ...votes };
+        
+        if (isUpvoted) {
+          delete newVotes[user.deviceId];
+        } else {
+          newVotes[user.deviceId] = true;
+        }
+
+        const count = Object.keys(newVotes).length;
+
+        if (dbRef && compItem.id && !compItem.id.startsWith("local_")) {
+          dbRef.ref(`complaints/${villageKey}/${compItem.id}`).update({
+            upvotes: newVotes,
+            upvoteCount: count
+          }).catch(err => console.error("Upvote error", err));
+        } else {
+          // Local storage update
+          const key = `offline_complaints_${villageKey}`;
+          const current = JSON.parse(localStorage.getItem(key) || "[]");
+          const idx = current.findIndex(c => c.id === compItem.id);
+          if (idx !== -1) {
+            current[idx].upvotes = newVotes;
+            current[idx].upvoteCount = count;
+            localStorage.setItem(key, JSON.stringify(current));
+            setComplaints(current);
+          }
+        }
+      };
+
+      // Toggle status of a complaint
+      const toggleStatus = (compItem) => {
+        let nextStatus = "Pending";
+        if (compItem.status === "Pending") nextStatus = "In-Progress";
+        else if (compItem.status === "In-Progress") nextStatus = "Resolved";
+        else nextStatus = "Pending";
+
+        if (dbRef && compItem.id && !compItem.id.startsWith("local_")) {
+          dbRef.ref(`complaints/${villageKey}/${compItem.id}`).update({
+            status: nextStatus
+          }).then(() => {
+            triggerToast("स्थिति अपडेट हो गई: " + (nextStatus === "Resolved" ? "समाधान हो गया ✅" : nextStatus === "In-Progress" ? "कार्य प्रगति पर ⚙️" : "लंबित ⏳"));
+          }).catch(err => console.error("Status update error", err));
+        } else {
+          // Local storage update
+          const key = `offline_complaints_${villageKey}`;
+          const current = JSON.parse(localStorage.getItem(key) || "[]");
+          const idx = current.findIndex(c => c.id === compItem.id);
+          if (idx !== -1) {
+            current[idx].status = nextStatus;
+            localStorage.setItem(key, JSON.stringify(current));
+            setComplaints(current);
+            triggerToast("ऑफलाइन मोड स्थिति अपडेट हो गई!");
+          }
+        }
+      };
+
+      const handlePhotoSelectComp = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        compressAndLoadPhoto(file, (base64) => setCompPhoto(base64));
+      };
+
+      const handlePhotoSelectNews = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        compressAndLoadPhoto(file, (base64) => setNewsPhoto(base64));
+      };
+
+      return (
+        <div class="flex-grow flex flex-col bg-slate-50 rounded-3xl overflow-hidden h-[80vh] border shadow-xs animate-fadeIn pb-4 relative">
+          
+          {/* Header metadata layout banner */}
+          <div class="bg-red-700 p-4 text-white flex items-center justify-between shadow-sm">
+            <div class="flex items-center space-x-2">
+              <span class="text-xl">📋</span>
+              <div class="leading-none">
+                <h4 class="text-sm font-extrabold font-sans">गाँव की शिकायतें व समस्या समाधान</h4>
+                <p class="text-[10px] text-red-100 font-semibold font-sans">📍 {user.gaon} पंचायत</p>
+              </div>
+            </div>
+            <button 
+              type="button"
+              onClick={() => openOverlay(setShowAddComplaint)}
+              class="px-3 py-2 bg-white text-red-700 hover:bg-red-50 rounded-xl font-extrabold flex items-center space-x-1 font-sans text-xs shadow-md active:scale-95 transition cursor-pointer"
+            >
+              <span>+ समस्या दर्ज करें</span>
+            </button>
+          </div>
+
+          <div class="bg-white border-b px-4 py-2.5 flex items-center justify-between text-xs text-gray-550 font-bold">
+            <span>📋 कुल दर्ज मामले: {complaints.length}</span>
+            <span class="text-red-500 bg-red-50 px-2 py-0.5 rounded-full text-[10px]">बिजली, पानी, सड़क एवं अन्य समस्या</span>
+          </div>
+
+          {/* Main List Container */}
+          <div class="flex-1 overflow-y-auto p-3 space-y-3 pb-16 no-scrollbar">
+            
+            {subTab === "complaints" ? (
+              complaints.length === 0 ? (
+                <div class="h-full flex flex-col items-center justify-center text-center text-gray-400 p-8 pt-16">
+                  <span class="text-4xl block mb-2">📋</span>
+                  <p class="text-xs font-bold font-sans text-gray-700">अभी कोई शिकायत दर्ज नहीं है।</p>
+                  <p class="text-[10px] text-gray-400 mt-1 leading-snug">यदि आपके गाँव में पानी, सड़क, बिजली जैसी कोई समस्या है, तो उपर दिये बटन को दबाकर दर्ज करें।</p>
+                </div>
+              ) : (
+                complaints.map((item) => {
+                  const isUpvoted = item.upvotes && !!item.upvotes[user.deviceId];
+                  const upvoteNum = item.upvoteCount || 0;
+                  
+                  return (
+                    <div key={item.id} class="bg-white border rounded-2xl shadow-xs overflow-hidden flex flex-col text-left">
+                      {/* Sub card header */}
+                      <div class="p-3 bg-gray-50 border-b flex items-start justify-between gap-1">
+                        <div class="leading-none">
+                          <span class="px-2 py-0.5 bg-gray-200 text-gray-800 font-bold font-sans rounded text-[9px] uppercase tracking-wider">
+                            {COMP_CATEGORIES[item.category] || "📦 अन्य समस्या"}
+                          </span>
+                          <p class="text-[9px] text-gray-400 mt-2 mb-0 font-medium font-sans">
+                            {item.senderName} ({ROLES.find(r => r.id === item.role)?.label?.split(" ")[0] || "👤"}) • {new Date(item.timestamp).toLocaleDateString()}
+                          </p>
+                        </div>
+
+                        {/* Status Badge */}
+                        <div 
+                          onClick={() => toggleStatus(item)}
+                          class={`px-2 py-0.5 rounded text-[9px] font-bold cursor-pointer font-sans select-none flex items-center space-x-1 transition active:scale-95 ${
+                            item.status === "Resolved" 
+                              ? "bg-green-100 text-green-800 border-green-200" 
+                              : item.status === "In-Progress"
+                                ? "bg-blue-100 text-blue-800 border-blue-200"
+                                : "bg-amber-100 text-amber-800 border-amber-200"
+                          } border`}
+                          title="बदलने के लिए क्लिक करें"
+                        >
+                          <span>{
+                            item.status === "Resolved" 
+                              ? "✅ समाधान हो गया" 
+                              : item.status === "In-Progress"
+                                ? "🛠️ काम चालू है"
+                                : "⏱️ लंबित (Pending)"
+                          }</span>
+                          <i class="fa-solid fa-arrows-spin text-[8px] opacity-60 ml-0.5"></i>
+                        </div>
+                      </div>
+
+                      {/* Sub card body with photo */}
+                      <div class="p-3 text-xs space-y-2">
+                        <h4 class="font-extrabold text-gray-800 font-sans text-xs">{item.title}</h4>
+                        <p class="text-gray-600 font-sans leading-relaxed text-[11px] whitespace-pre-wrap">{item.description}</p>
+                        
+                        {item.photo && (
+                          <div class="mt-2 bg-gray-100 rounded-xl overflow-hidden max-h-48 flex justify-center border">
+                            <img src={item.photo} alt="Grievance Scene" class="w-full h-full object-contain max-h-48" />
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Upvotes & Status Actions */}
+                      <div class="px-3 py-2 bg-gray-50/50 border-t flex items-center justify-between text-[11px]">
+                        <button 
+                          type="button"
+                          onClick={() => handleUpvote(item)}
+                          class={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl border transition cursor-pointer ${
+                            isUpvoted 
+                              ? "bg-red-50 text-red-600 border-red-200 font-extrabold" 
+                              : "bg-white text-gray-500 border-gray-200 hover:text-gray-700 hover:bg-gray-50"
+                          }`}
+                        >
+                          <i class={`fa-${isUpvoted ? 'solid' : 'regular'} fa-heart text-xs`}></i>
+                          <span class="font-sans">समर्थन ({upvoteNum})</span>
+                        </button>
+
+                        <div class="flex items-center space-x-2">
+                          <button 
+                            type="button"
+                            onClick={() => {
+                              setSelectedItemType("complaint");
+                              openOverlay(setSelectedItemForComments, item);
+                            }}
+                            class="p-1.5 px-2.5 bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200 rounded-xl flex items-center justify-center space-x-1 font-sans font-extrabold text-[10px] cursor-pointer"
+                          >
+                            <i class="fa-solid fa-comments text-purple-650"></i>
+                            <span>जवाब / टिप्पणी</span>
+                          </button>
+
+                          <a 
+                            href={`tel:${item.senderMobile}`}
+                            class="p-1 px-2.5 bg-white hover:bg-gray-100 rounded-xl border flex items-center justify-center space-x-1 font-sans text-gray-600 font-bold text-[10px]"
+                          >
+                            <i class="fa-solid fa-phone text-[9px] text-primary"></i>
+                            <span>कॉल</span>
+                          </a>
+                          
+                          <button 
+                            type="button"
+                            onClick={() => toggleStatus(item)}
+                            class="px-2 py-2 bg-gray-200 hover:bg-gray-300 rounded-xl text-[9.5px] font-bold text-gray-700 flex items-center space-x-1 cursor-pointer"
+                          >
+                            <span class="font-sans">⏱️ स्थिति बदलें</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )
+            ) : null
+            }
+          </div>
+
+          {/* ADD COMPLAINT BACKDROP DIALOG MODAL */}
+          {showAddComplaint && (
+            <div class="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+              <div class="bg-white rounded-3xl p-5 w-full max-w-sm max-h-[82vh] overflow-y-auto shadow-2xl animate-zoomIn">
+                <div class="flex items-center justify-between border-b pb-2 mb-3">
+                  <h3 class="text-xs font-bold text-gray-800 font-sans">📝 नयी समस्या/शिकायत दर्ज करें</h3>
+                  <button type="button" onClick={() => setShowAddComplaint(false)} class="p-1 px-3 text-xs font-bold bg-gray-100 rounded-full hover:bg-gray-200">
+                    ✕
+                  </button>
+                </div>
+
+                <form onSubmit={handleCreateComplaint} class="space-y-3 text-xs font-sans text-left pb-10">
+                  <div>
+                    <label class="block font-bold text-gray-750 mb-1 leading-none text-[11px]">समस्या का मुख्य विषय/शीर्षक *</label>
+                    <input 
+                      type="text" 
+                      placeholder="जैसे: वार्ड 3 में पीने की पाइपलाइन टूटी है"
+                      value={compTitle} 
+                      onChange={e => setCompTitle(e.target.value)}
+                      class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs outline-none focus:bg-white focus:border-primary"
+                      required
+                    />
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-2">
+                    <div>
+                      <label class="block font-bold text-gray-750 mb-1 leading-none text-[11px]">समस्या की श्रेणी *</label>
+                      <select 
+                        value={compCategory} 
+                        onChange={e => setCompCategory(e.target.value)}
+                        class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs font-bold outline-none cursor-pointer"
+                        required
+                      >
+                        {Object.keys(COMP_CATEGORIES).map(k => (
+                          <option key={k} value={k}>{COMP_CATEGORIES[k]}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label class="block font-bold text-gray-750 mb-1 leading-none text-[11px]">गाँव (स्वचालित)</label>
+                      <input 
+                        type="text" 
+                        value={user.gaon} 
+                        class="w-full p-2.5 bg-gray-100 text-gray-500 border rounded-xl text-xs outline-none"
+                        disabled
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label class="block font-bold text-gray-750 mb-1 leading-none text-[11px]">पूरी समस्या का विवरण *</label>
+                    <textarea 
+                      rows="3" 
+                      placeholder="समस्या का खुलकर वर्णन करें ताकि पंचायत व गांव के लोग समझ सकें..."
+                      value={compDesc} 
+                      onChange={e => setCompDesc(e.target.value)}
+                      class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs outline-none focus:bg-white focus:border-primary resize-none"
+                      required
+                    ></textarea>
+                  </div>
+
+                  <div>
+                    <label class="block font-bold text-gray-750 mb-1 leading-none text-[11px]">📸 फोटो जोड़ें (वैकल्पिक)</label>
+                    <input 
+                      type="file" 
+                      accept="image/*" 
+                      onChange={handlePhotoSelectComp} 
+                      class="w-full p-1.5 bg-gray-50 border rounded-xl text-[10px] cursor-pointer" 
+                    />
+                    {compPhoto && (
+                      <img src={compPhoto} class="mt-2 w-14 h-14 rounded-lg object-contain border bg-white" alt="Attachment Preview" />
+                    )}
+                  </div>
+
+                  <button 
+                    type="submit" 
+                    class="w-full py-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl shadow-md cursor-pointer active:scale-95 transition"
+                  >
+                    🚀 पंचायत बोर्ड पर दर्ज करें
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* ADD NEWS BULLETIN BACKDROP DIALOG MODAL */}
+          {showAddNews && (
+            <div class="fixed inset-0 bg-black/60 backdrop-blur-xs z-50 flex items-center justify-center p-4">
+              <div class="bg-white rounded-3xl p-5 w-full max-w-sm max-h-[82vh] overflow-y-auto shadow-2xl animate-zoomIn">
+                <div class="flex items-center justify-between border-b pb-2 mb-3">
+                  <h3 class="text-xs font-bold text-gray-800 font-sans">📰 गाँव की नयी खबर/सूचना साझा करें</h3>
+                  <button type="button" onClick={() => setShowAddNews(false)} class="p-1 px-3 text-xs font-bold bg-gray-100 rounded-full hover:bg-gray-200">
+                    ✕
+                  </button>
+                </div>
+
+                <form onSubmit={handleCreateNews} class="space-y-3 text-xs font-sans text-left pb-10">
+                  <div>
+                    <label class="block font-bold text-gray-755 mb-1 leading-none text-[11px]">खबर का शीर्षक *</label>
+                    <input 
+                      type="text" 
+                      placeholder="जैसे: कल सुबह 10 बजे पंचायत भवन में बैठक"
+                      value={newsTitle} 
+                      onChange={e => setNewsTitle(e.target.value)}
+                      class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs outline-none focus:bg-white focus:border-primary"
+                      required
+                    />
+                  </div>
+
+                  <div class="grid grid-cols-2 gap-2">
+                    <div>
+                      <label class="block font-bold text-gray-755 mb-1 leading-none text-[11px]">खबर का विषय *</label>
+                      <select 
+                        value={newsCategory} 
+                        onChange={e => setNewsCategory(e.target.value)}
+                        class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs font-bold outline-none cursor-pointer"
+                        required
+                      >
+                        {Object.keys(NEWS_CATEGORIES).map(k => (
+                          <option key={k} value={k}>{NEWS_CATEGORIES[k]}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label class="block font-bold text-gray-755 mb-1 leading-none text-[11px]">गाँव (स्वचालित)</label>
+                      <input 
+                        type="text" 
+                        value={user.gaon} 
+                        class="w-full p-2.5 bg-gray-100 text-gray-500 border rounded-xl text-xs outline-none"
+                        disabled
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label class="block font-bold text-gray-755 mb-1 leading-none text-[11px]">समाचार का पूरा विवरण *</label>
+                    <textarea 
+                      rows="3" 
+                      placeholder="पूरी खबर या जरूरी निर्देश यहाँ संक्षेप में लिखें..."
+                      value={newsDetails} 
+                      onChange={e => setNewsDetails(e.target.value)}
+                      class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs outline-none focus:bg-white focus:border-primary resize-none"
+                      required
+                    ></textarea>
+                  </div>
+
+                  <div>
+                    <label class="block font-bold text-gray-755 mb-1 leading-none text-[11px]">📸 खबर की फोटो (वैकल्पिक)</label>
+                    <input 
+                      type="file" 
+                      accept="image/*" 
+                      onChange={handlePhotoSelectNews} 
+                      class="w-full p-1.5 bg-gray-50 border rounded-xl text-[10px] cursor-pointer" 
+                    />
+                    {newsPhoto && (
+                      <img src={newsPhoto} class="mt-2 w-14 h-14 rounded-lg object-contain border bg-white" alt="Attachment Preview" />
+                    )}
+                  </div>
+
+                  <button 
+                    type="submit" 
+                    class="w-full py-3 bg-primary hover:bg-green-850 text-white font-bold rounded-xl shadow-md cursor-pointer active:scale-95 transition"
+                  >
+                    🚀 समाचार पब्लिश करें
+                  </button>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {selectedItemForComments && (
+            <CommentsView 
+              item={selectedItemForComments} 
+              itemType={selectedItemType} 
+              user={user} 
+              dbRef={dbRef} 
+              onClose={() => setSelectedItemForComments(null)}
+              triggerToast={triggerToast}
+            />
+          )}
+
+        </div>
+      );
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Core Comments / Replies Component (CommentsView)
+    // ──────────────────────────────────────────────────────────
+    function CommentsView({ item, itemType, user, dbRef, onClose, triggerToast }) {
+      const [commentText, setCommentText] = useState("");
+      const [commentsList, setCommentsList] = useState([]);
+      const villageKey = getCleanVillagePath(user.gaon);
+
+      // Connect to Firebase and listen to comments for this entry
+      useEffect(() => {
+        const commentsPath = `comments/${itemType}/${item.id}`;
+        const refObj = dbRef ? dbRef.ref(commentsPath) : null;
+
+        if (refObj) {
+          refObj.on("value", (snapshot) => {
+            const data = snapshot.val();
+            const list = [];
+            if (data) {
+              Object.keys(data).forEach((k) => {
+                list.push({ id: k, ...data[k] });
+              });
+            }
+            // Sort comments chronologically so conversation flows down
+            setCommentsList(list.sort((a, b) => a.timestamp - b.timestamp));
+          });
+        } else {
+          // Backup offline cached comments
+          const localKey = `offline_comments_${itemType}_${item.id}`;
+          const local = JSON.parse(localStorage.getItem(localKey) || "[]");
+          setCommentsList(local);
+        }
+
+        return () => {
+          if (refObj) refObj.off();
+        };
+      }, [item.id, itemType, dbRef]);
+
+      const handleAddComment = (e) => {
+        e.preventDefault();
+        if (!commentText.trim()) return;
+
+        const newComment = {
+          text: commentText.trim(),
+          senderName: user.naam,
+          senderMobile: user.mobile,
+          role: user.role,
+          timestamp: Date.now()
+        };
+
+        const commentsPath = `comments/${itemType}/${item.id}`;
+
+        if (dbRef) {
+          dbRef.ref(commentsPath).push(newComment)
+            .then(() => {
+              setCommentText("");
+              triggerToast("💬 टिप्पणी जोड़ी गई!");
+            })
+            .catch((err) => {
+              console.error(err);
+              triggerToast("टिप्पणी जोड़ने में त्रुटि!", true);
+            });
+        } else {
+          // Local fallback saving
+          const localKey = `offline_comments_${itemType}_${item.id}`;
+          const current = JSON.parse(localStorage.getItem(localKey) || "[]");
+          newComment.id = "local_comm_" + Date.now();
+          current.push(newComment);
+          localStorage.setItem(localKey, JSON.stringify(current));
+          setCommentsList([...current]);
+          setCommentText("");
+          triggerToast("ऑफलाइन टिप्पणी सहेजी गई! 💾");
+        }
+      };
+
+      return (
+        <div class="fixed inset-0 bg-white z-50 flex flex-col p-4 animate-slideUp text-left h-full">
+          {/* Header section with closing action */}
+          <div class="flex items-center justify-between border-b pb-3 mb-4 shrink-0">
+            <div class="flex items-center space-x-2">
+              <button 
+                onClick={onClose} 
+                class="p-2 hover:bg-gray-100 rounded-xl transition cursor-pointer"
+                title="पीछे जाएं"
+              >
+                <i class="fa-solid fa-arrow-left text-lg text-primary"></i>
+              </button>
+              <div>
+                <h3 class="text-xs font-black text-gray-800 font-sans tracking-wide leading-none">टिप्पणियाँ व जवाब (Replies)</h3>
+                <span class="text-[9px] text-gray-400 font-sans mt-1 block">विषय: {item.title || item.details?.substring(0, 30)}...</span>
+              </div>
+            </div>
+            
+            <button 
+              onClick={onClose} 
+              class="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-800 font-bold rounded-xl text-xs font-sans cursor-pointer active:scale-95 transition"
+            >
+              बंद करें
+            </button>
+          </div>
+
+          {/* Core original topic card visualization */}
+          <div class="bg-gray-50 border rounded-2xl p-3 mb-4 text-xs font-sans shrink-0">
+            <div class="flex items-center justify-between mb-2">
+              <span class="px-2 py-0.5 bg-gray-200 text-gray-800 font-extrabold rounded text-[9px] uppercase">
+                मूल पोस्ट (Original Post)
+              </span>
+              <span class="text-[8.5px] text-gray-400 font-medium">
+                {new Date(item.timestamp).toLocaleDateString()}
+              </span>
+            </div>
+            <h4 class="font-bold text-gray-800 text-xs mb-1 font-sans">{item.title}</h4>
+            <p class="text-gray-600 font-sans text-[11px] line-clamp-2">{item.description || item.details}</p>
+          </div>
+
+          {/* Conversation Thread list scroll zone */}
+          <div class="flex-1 overflow-y-auto space-y-3 pr-1 pb-24 no-scrollbar">
+            {commentsList.length === 0 ? (
+              <div class="py-12 flex flex-col items-center justify-center text-center text-gray-400">
+                <i class="fa-regular fa-comments text-3xl mb-2 animate-pulse text-gray-300"></i>
+                <p class="text-xs font-bold font-sans text-gray-700">अभी तक कोई टिप्पणी नहीं है।</p>
+                <p class="text-[9.5px] text-gray-400 leading-normal max-w-[200px] mx-auto mt-1">पहले व्यक्ति बनें और नीचे बॉक्स में अपना जवाब लिखकर सुझाव दें!</p>
+              </div>
+            ) : (
+              commentsList.map((c) => {
+                const roleLabel = ROLES.find(r => r.id === c.role)?.label?.split(" ")[0] || "👤";
+                return (
+                  <div key={c.id} class="bg-white border text-xs font-sans rounded-2xl p-3 flex flex-col space-y-1.5 text-left shadow-xs transition hover:border-gray-300">
+                    <div class="flex items-center justify-between">
+                      <div class="flex items-center space-x-1.5 leading-none">
+                        <span class="font-black text-gray-800 text-[11px] font-sans">{c.senderName}</span>
+                        <span class="px-1.5 py-0.5 bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-100 font-extrabold text-[8.5px] rounded font-sans uppercase">
+                          {roleLabel}
+                        </span>
+                      </div>
+                      <span class="text-[8.5px] text-gray-400 font-medium font-sans">
+                        {new Date(c.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                      </span>
+                    </div>
+                    
+                    <p class="text-gray-700 font-sans text-[11px] whitespace-pre-wrap leading-relaxed">{c.text}</p>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* Submit interface docked on bottom right above spacing */}
+          <div class="absolute bottom-0 left-0 right-0 bg-white border-t p-3.5 z-10 shrink-0">
+            <form onSubmit={handleAddComment} class="flex items-center space-x-2">
+              <input 
+                type="text" 
+                placeholder="यहाँ अपना जवाब/टिप्पणी लिखें (Write reply here)..."
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                class="flex-1 p-3 bg-gray-50 border rounded-2xl text-xs font-sans font-medium outline-none focus:bg-white focus:border-purple-600 transition"
+                required
+              />
+              <button 
+                type="submit"
+                class="p-3 px-4 bg-purple-605 bg-purple-600 hover:bg-purple-700 text-white font-extrabold rounded-2xl text-xs shadow-md flex items-center justify-center space-x-1 active:scale-95 transition cursor-pointer"
+              >
+                <i class="fa-solid fa-paper-plane text-[10px]"></i>
+                <span class="font-sans">जवाब दें</span>
+              </button>
+            </form>
+          </div>
+        </div>
+      );
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Refer and Earn Dashboard (Earns tracking and verification)
+    // ──────────────────────────────────────────────────────────
+    function ReferView({ user, allUsers, triggerToast }) {
+      const [uupi, setUupi] = useState("");
+      const [withdrawalHistory, setWithdrawalHistory] = useState([]);
+      const [myReferrals, setMyReferrals] = useState([]);
+
+      // Retrieve earnings values
+      useEffect(() => {
+        const referrals = JSON.parse(localStorage.getItem("referrals") || "[]");
+        const list = referrals.filter(r => r.referrerId === user.deviceId);
+        setMyReferrals(list);
+
+        const withdrawals = JSON.parse(localStorage.getItem("withdrawals") || "[]");
+        const wList = withdrawals.filter(w => w.deviceId === user.deviceId);
+        setWithdrawalHistory(wList);
+      }, [user.deviceId]);
+
+      // Calculate aggregated stats
+      const totalCount = myReferrals.length;
+      const approvedCount = myReferrals.filter(r => r.status === "Approved").length;
+      const pendingCount = myReferrals.filter(r => r.status === "Pending" || r.status === "Ready").length;
+      
+      const totalEarned = approvedCount * 2.0;
+      const totalPending = pendingCount * 2.0;
+
+      const totalWithdrawn = withdrawalHistory
+        .filter(w => w.status === "Approved")
+        .reduce((sum, current) => sum + current.amount, 0);
+
+      // WhatsApp Campaign messaging link
+      const referralCode = user.referralCode;
+      const campaignText = `मेरे कोड ${referralCode} से जुड़ो और हमारे गाँव की डिजिटल चौपाल Gaon Digital का हिस्सा बनो! लिंक: https://gaondigital.app/?ref=${referralCode}`;
+
+      const handleShareWhatsApp = () => {
+        const shareUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(campaignText)}`;
+        window.open(shareUrl, "_blank");
+      };
+
+      const handleCopyToClipboard = () => {
+        navigator.clipboard.writeText(referralCode);
+        triggerToast("रेफरल कोड कॉपी हो गया है! 📋");
+      };
+
+      // Handle custom UPI withdraw request Gating
+      const handleWithdrawalRequest = (e) => {
+        e.preventDefault();
+        if (!uupi.includes("@")) {
+          return triggerToast("कृपया एक मान्य UPI ID दर्ज करें (जैसे: name@upi)!", true);
+        }
+
+        // Constraints validations
+        // Minimum: ₹20 balance requires at least 10 referrals approved
+        if (approvedCount < 10) {
+          return triggerToast("निकासी के लिए कम से कम 10 स्वीकृत (Approved/Ready) रेफ़र होने चाहिए!", true);
+        }
+
+        const balance = totalEarned - totalWithdrawn;
+        if (balance < 20) {
+          return triggerToast("निकासी के लिए न्यूनतम राशि ₹20 होना अनिवार्य है!", true);
+        }
+
+        if (balance > 500) {
+          return triggerToast("एक बार में अधिकतम ₹500 ही निकाले जा सकते हैं!", true);
+        }
+
+        // Limit to once a month check
+        const hasWithdrawnThisMonth = withdrawalHistory.some(w => 
+          (Date.now() - w.timestamp) < 30 * 24 * 3600 * 1000
+        );
+        if (hasWithdrawnThisMonth) {
+          return triggerToast("आप महीने में केवल एक बार ही निकासी का अनुरोध भेज सकते हैं!", true);
+        }
+
+        const payoutTransaction = {
+          id: "wd_" + Math.random().toString(36).slice(2, 9),
+          deviceId: user.deviceId,
+          name: user.naam,
+          upiId: uupi.trim(),
+          amount: balance,
+          referralsCount: approvedCount,
+          timestamp: Date.now(),
+          status: "Pending" // Pending, Approved, Rejected
+        };
+
+        const allWd = JSON.parse(localStorage.getItem("withdrawals") || "[]");
+        allWd.push(payoutTransaction);
+        localStorage.setItem("withdrawals", JSON.stringify(allWd));
+
+        setWithdrawalHistory([...withdrawalHistory, payoutTransaction]);
+        setUupi("");
+        triggerToast("निकासी का अनुरोध एडमिन के पास भेज दिया गया है! ⏳");
+      };
+
+      return (
+        <div class="space-y-4 animate-fadeIn">
+          <div>
+            <h2 class="text-xl font-extrabold text-[#2E7D32] font-sans">👥 रेफ़र करो और कमाओ (Referral)</h2>
+            <p class="text-[10px] text-gray-500 font-sans font-medium">गाँव के मित्रों को जोड़कर इनाम और नगद राशि प्राप्त करें।</p>
+          </div>
+
+          {/* Earnings summary stats card layout */}
+          <div class="bg-gradient-to-br from-indigo-700 to-purple-800 p-5 rounded-3xl text-white shadow-md relative">
+            <h3 class="text-xs font-bold text-indigo-100 font-sans">आपकी कुल कमाई (Earnings Summary)</h3>
+            <div class="flex items-baseline space-x-1.5 mt-1">
+              <span class="text-3xl font-extrabold font-sans">₹{totalEarned}</span>
+              <span class="text-[10px] text-purple-200">स्वीकृत रेफ़र ₹2 प्रत्येक</span>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 mt-4 border-t border-indigo-500/40 pt-3 text-[11px]">
+              <div>
+                <p class="text-[9px] text-indigo-200">सत्यापन चल रहा है (Pending)</p>
+                <p class="font-bold font-sans mt-0.5">₹{totalPending}</p>
+              </div>
+              <div>
+                <p class="text-[9px] text-indigo-200">विथड्रा किया हुआ राशि (Withdrawn)</p>
+                <p class="font-bold font-sans mt-0.5">₹{totalWithdrawn}</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Referral Code Interactive card */}
+          <div class="bg-white p-4 rounded-3xl border shadow-xs flex flex-col items-center text-center space-y-3">
+            <p class="text-xs text-gray-500 font-bold font-sans">आपका रेफ़र कोड कार्ड:</p>
+            <div 
+              onClick={handleCopyToClipboard}
+              class="px-5 py-2.5 bg-gray-50 text-gray-800 border-2 border-dashed border-primary hover:bg-gray-100 cursor-pointer rounded-2xl flex items-center justify-center space-x-2 text-base font-extrabold tracking-widest active:scale-95 transition"
+            >
+              <span>{referralCode}</span>
+              <i class="fa-solid fa-copy text-sm text-primary"></i>
+            </div>
+            
+            <button 
+              onClick={handleShareWhatsApp}
+              class="w-full py-3.5 bg-green-700 hover:bg-green-800 text-white font-bold rounded-2xl flex items-center justify-center space-x-2 text-xs transition active:scale-95 shadow-sm font-sans"
+            >
+              <i class="fa-brands fa-whatsapp text-lg"></i>
+              <span>WhatsApp पर मित्रों को शेयर करें</span>
+            </button>
+          </div>
+
+          {/* Withdrawal Input submission field */}
+          <div class="bg-white p-4 rounded-3xl border shadow-xs">
+            <h4 class="text-xs font-bold text-gray-800 mb-2 font-sans pb-1.5 border-b"><i class="fa-solid fa-wallet text-accent mr-1"></i> नगद निकासी (UPI Withdrawal Verification)</h4>
+            
+            <form onSubmit={handleWithdrawalRequest} class="space-y-3 text-xs">
+              <div>
+                <label class="block text-[10px] text-gray-500 mb-1 font-bold">अपना UPI ID दर्ज करें</label>
+                <input 
+                  type="text" 
+                  placeholder="जैसे: preetipatidar@ybl"
+                  value={uupi} 
+                  onChange={e => setUupi(e.target.value)}
+                  class="w-full p-3 bg-gray-50 border rounded-xl text-xs focus:ring-1 focus:ring-primary outline-none"
+                  required
+                />
+              </div>
+
+              <div class="bg-purple-50 p-3 rounded-2xl text-[10px] text-purple-800 border border-purple-100 space-y-1 leading-snug">
+                <p class="font-bold">निकासी के कड़े नियम (Required Anti-Fraud):</p>
+                <p>1. न्यूनतम विथड्रावल ₹20 स्वीकृत है (न्यूनतम 10 रेफ़र होने चाहिए)।</p>
+                <p>2. उपयोगकर्ता (Referred User) ने कम से कम 3 बार ऐप ओपन किया हो।</p>
+                <p>3. पेमेंट एडमिन द्वारा सत्यापित होने पर आपके UPI में 7 दिन के भीतर क्रेडिट कर दिया जावेगा।</p>
+              </div>
+
+              <button 
+                type="submit" 
+                class="w-full py-3.5 bg-primary hover:bg-green-800 text-white font-bold rounded-xl active:scale-95 transition text-xs font-sans shadow-md"
+              >
+                विथड्रावल रिक्वेस्ट भेजें (Withdraw)
+              </button>
+            </form>
+          </div>
+
+          {/* My referrals tracking lists */}
+          <div class="bg-white p-4 rounded-3xl border shadow-xs">
+            <h4 class="text-xs font-bold text-gray-800 mb-2 font-sans pb-1.5 border-b">📋 आपके रेफरल्स की स्थिति:</h4>
+            
+            {myReferrals.length === 0 ? (
+              <p class="text-[10px] text-gray-400 text-center py-4 font-sans">अभी तक कोई सन्देश / रेफ़र लिस्ट नहीं मिला है।</p>
+            ) : (
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-[10px] border-collapse text-gray-600">
+                  <thead>
+                    <tr class="border-b bg-gray-50 text-[9px] uppercase font-bold text-gray-500">
+                      <th class="py-2 px-1">नाम</th>
+                      <th class="py-2 px-1">मोबाइल</th>
+                      <th class="py-2 px-1">दर्जा</th>
+                      <th class="py-2 px-1 text-right">राशि</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {myReferrals.map((ref) => (
+                      <tr key={ref.id} class="border-b hover:bg-gray-50">
+                        <td class="py-2 px-1 font-bold text-gray-800">{ref.referredName}</td>
+                        <td class="py-2 px-1 font-sans">{ref.mobile}</td>
+                        <td class="py-2 px-1">
+                          <span class={`px-1.5 py-0.5 rounded-full text-[8px] font-bold ${
+                            ref.status === "Approved" ? "bg-green-150 border border-green-300 text-green-800" :
+                            ref.status === "Ready" ? "bg-blue-100 border border-blue-200 text-blue-700" :
+                            ref.status === "Flagged" ? "bg-red-100 border border-red-300 text-red-800" :
+                            "bg-yellow-100 border border-yellow-250 text-yellow-700"
+                          }`}>
+                            {ref.status === "Approved" ? "सफल💰" : 
+                             ref.status === "Ready" ? "तैयार✅" :
+                             ref.status === "Flagged" ? "संदेह⚠️" : "प्रतीक्षा⏳"}
+                          </span>
+                        </td>
+                        <td class="py-2 px-1 text-right font-sans">₹{ref.amount.toFixed(1)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // Helper to render text messages and parse any maps URLs as safe active buttons
+    function renderTextWithLinks(text) {
+      if (!text) return "";
+      const urlRegex = /(https?:\/\/[^\s]+)/g;
+      const parts = text.split(urlRegex);
+      return parts.map((part, index) => {
+        if (part.match(urlRegex)) {
+          return (
+            <div key={index} class="mt-2 text-left">
+              <a 
+                href={part} 
+                target="_blank" 
+                rel="noopener noreferrer" 
+                class="inline-flex items-center space-x-1 px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white font-extrabold text-[10px] rounded-lg tracking-wide uppercase transition active:scale-95 shadow-sm font-sans cursor-pointer"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <i class="fa-solid fa-map-location-dot"></i>
+                <span>सटीक मैप्स लोकेशन देखें</span>
+              </a>
+            </div>
+          );
+        }
+        return <span key={index}>{part}</span>;
+      });
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Notifications Center Subview overlay
+    // ──────────────────────────────────────────────────────────
+    function NotificationsView({ notifications, onMarkAllRead, onClose }) {
+      return (
+        <div class="fixed inset-0 bg-bgLight z-40 max-w-md w-full mx-auto flex flex-col p-4 animate-fadeIn pb-24 text-left">
+          <div class="flex items-center justify-between border-b pb-3 mb-3">
+            <div>
+              <h2 class="text-xl font-extrabold text-[#2E7D32] font-sans">🔔 सूचना केंद्र (Notifications)</h2>
+              <p class="text-[10px] text-gray-500 font-sans font-medium">गाँव की खबरें और महत्वपूर्ण अपडेट</p>
+            </div>
+            <button onClick={onClose} class="p-2 px-3 bg-white text-gray-600 rounded-xl hover:bg-gray-200 font-bold border text-xs font-sans cursor-pointer">
+              बंद करें (Close)
+            </button>
+          </div>
+
+          {notifications.length > 0 && (
+            <button 
+              onClick={onMarkAllRead}
+              class="w-full mb-3 py-2 bg-primary/10 hover:bg-primary/15 text-primary text-xs font-bold rounded-xl transition font-sans cursor-pointer"
+            >
+              ✓ सभी सूचनाएं पढ़ ली गई मार्क करें
+            </button>
+          )}
+
+          <div class="flex-grow overflow-y-auto space-y-3 no-scrollbar pb-6">
+            {notifications.length === 0 ? (
+              <div class="bg-white rounded-3xl p-8 text-center text-gray-400 text-xs border font-sans">
+                💤 कोई नयी सूचनाएं नहीं मिली हैं।
+              </div>
+            ) : (
+              notifications.map((not) => (
+                <div key={not.id} class={`bg-white rounded-2xl p-3 border-l-4 shadow-xs relative ${
+                  not.read ? "border-l-gray-300 opacity-75" : "border-l-primary"
+                } border`}>
+                  <div class="flex items-start space-x-3 text-xs">
+                    <span class="text-lg">
+                      {not.type === 'sos' ? '🚨' :
+                       not.type === 'bazaar' ? '📢' :
+                       not.type === 'announcement' ? '👑' :
+                       not.type === 'referral' ? '💰' : '🔔'}
+                    </span>
+                    <div class="leading-relaxed flex-1">
+                      <h4 class="font-extrabold text-gray-800 font-sans">{not.title}</h4>
+                      <p class="text-[11px] text-gray-500 font-medium font-sans mt-0.5">{renderTextWithLinks(not.message)}</p>
+                      <span class="text-[8px] text-gray-400 font-sans mt-1.5 block">
+                        {new Date(not.timestamp).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Mera profile / Customisation Tab Dashboard
+    // ──────────────────────────────────────────────────────────
+    function MeraView({ user, allPosts, onUpdateProfile, triggerToast }) {
+      const [isEditing, setIsEditing] = useState(false);
+      const [editName, setEditName] = useState(user.naam);
+      const [editRole, setEditRole] = useState(user.role);
+      const [editPhoto, setEditPhoto] = useState(user.photo);
+
+      const handlePhotoSelect = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        compressAndLoadPhoto(file, (compressedBase64) => {
+          setEditPhoto(compressedBase64);
+        });
+      };
+
+      const handleSave = (e) => {
+        e.preventDefault();
+        if (!editName.trim()) {
+          return triggerToast("नाम दर्ज करना अनिवार्य है!", true);
+        }
+        onUpdateProfile({
+          naam: editName.trim(),
+          role: editRole,
+          photo: editPhoto
+        });
+        setIsEditing(false);
+      };
+
+      // Filter products listing registered by CURRENT profile
+      const myBazaarItems = allPosts.filter(p => p.sellerMobile === user.mobile);
+
+      return (
+        <div class="space-y-4 animate-fadeIn">
+          <div>
+            <h2 class="text-xl font-extrabold text-[#2E7D32] font-sans">👤 मेरा प्रोफाइल (My Profile)</h2>
+            <p class="text-[10px] text-gray-500 font-sans font-medium">आपके द्वारा नियंत्रित क्रेडेंशियल्स और विवरण</p>
+          </div>
+
+          <div class="bg-white p-5 rounded-3xl border shadow-xs animate-fadeIn text-xs">
+            {isEditing ? (
+              <form onSubmit={handleSave} class="space-y-4">
+                <div class="flex flex-col items-center gap-2 pb-3 border-b">
+                  {editPhoto ? (
+                    <img src={editPhoto} class="w-20 h-20 rounded-full object-cover border-4 border-primary" alt="Editted Photo" />
+                  ) : (
+                    <div class="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center border-2 border-dashed border-gray-300">
+                      <i class="fa-solid fa-camera text-gray-400 text-xl"></i>
+                    </div>
+                  )}
+                  <label class="px-3 py-1 bg-gray-100 border rounded-lg cursor-pointer text-[10px] font-bold transition font-sans">
+                    तस्वीर बदलें
+                    <input type="file" accept="image/*" class="hidden" onChange={handlePhotoSelect} />
+                  </label>
+                </div>
+
+                <div>
+                  <label class="block text-[10px] font-bold text-gray-700 mb-1">पूरा नाम दर्ज करें (Naam)</label>
+                  <input 
+                    type="text" 
+                    value={editName}
+                    onChange={e => setEditName(e.target.value)}
+                    class="w-full p-3 bg-gray-50 border rounded-xl"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label class="block text-[10px] font-bold text-gray-700 mb-1">आप क्या काम करते हैं (Role)</label>
+                  <select 
+                    value={editRole}
+                    onChange={e => setEditRole(e.target.value)}
+                    class="w-full p-3 bg-gray-50 border rounded-xl"
+                    required
+                  >
+                    {ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                  </select>
+                </div>
+
+                {/* Secure information locked constraint triggers */}
+                <div class="bg-yellow-50 p-3 rounded-2xl border text-yellow-800 leading-normal text-[10px]">
+                  🔒 सुरक्षा और धोखाधड़ी से बचाव के लिए, मोबाइल नंबर और रजिस्टर्ड गांव का विवरण बदलाव नहीं किया जा सकता।
+                </div>
+
+                <div class="flex gap-2">
+                  <button 
+                    type="submit" 
+                    class="flex-1 py-3 bg-primary text-white font-bold rounded-xl active:scale-95 transition"
+                  >
+                    सहेजें (Save Changes)
+                  </button>
+                  <button 
+                    type="button" 
+                    onClick={() => {
+                      setEditName(user.naam);
+                      setEditRole(user.role);
+                      setEditPhoto(user.photo);
+                      setIsEditing(false);
+                    }}
+                    class="py-3 px-5 bg-gray-100 text-gray-600 rounded-xl hover:bg-gray-200 transition"
+                  >
+                    रद्द करें
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div class="space-y-4">
+                <div class="flex items-center space-x-3.5 pb-4 border-b">
+                  {user.photo ? (
+                    <img src={user.photo} class="w-16 h-16 rounded-full object-cover border-2 border-primary" alt="Profile" />
+                  ) : (
+                    <div class="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center font-extrabold text-2xl text-primary font-sans">
+                      {user.naam[0]}
+                    </div>
+                  )}
+                  <div class="leading-snug">
+                    <h3 class="text-sm font-extrabold text-gray-800 font-sans">{user.naam}</h3>
+                    <p class="text-[10px] text-primary font-bold mt-0.5">💼 {ROLES.find(r => r.id === user.role)?.label || user.role}</p>
+                    <span class="text-[9px] bg-gray-100 px-2 py-0.5 border rounded-full text-gray-500 font-sans mt-1 inline-block">
+                      {user.gaon}
+                    </span>
+                  </div>
+                </div>
+
+                <div class="space-y-2 text-[11px] font-sans text-gray-600">
+                  <div class="flex justify-between border-b py-1.5">
+                    <span>📞 मोबाइल नंबर (Locked):</span>
+                    <span class="font-bold text-gray-800">{user.mobile}</span>
+                  </div>
+                  <div class="flex justify-between border-b py-1.5">
+                    <span>🔑 डिवाइस प्रमाण: (UUID)</span>
+                    <span class="font-mono text-[9px] text-gray-400 bg-gray-50 px-1 rounded truncate max-w-[180px]" title={user.deviceId}>{user.deviceId}</span>
+                  </div>
+                  <div class="flex justify-between border-b py-1.5">
+                    <span>📱 ऐप ओपन काउंट:</span>
+                    <span class="font-bold text-gray-800 bg-blue-50 text-blue-700 px-2 rounded-md">{user.appOpens || 1} बार</span>
+                  </div>
+                  <div class="flex justify-between py-1.5">
+                    <span>🔧 वर्तमान वर्शन (Version):</span>
+                    <span class="text-gray-400 font-bold">Gaon Digital v1.0</span>
+                  </div>
+                </div>
+
+                <button 
+                  onClick={() => setIsEditing(true)}
+                  class="w-full py-3 bg-gray-50 border border-gray-200 hover:bg-gray-100 text-gray-750 font-bold rounded-xl flex items-center justify-center space-x-1 transition active:scale-95"
+                >
+                  <i class="fa-solid fa-user-pen text-xs text-primary mr-1"></i>
+                  <span>प्रैस करें प्रोफाइल सहेजने के लिए</span>
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Sub-tab segment: My posted Bazaar list */}
+          <div class="bg-white p-4 rounded-3xl border shadow-xs">
+            <h4 class="text-xs font-bold text-gray-805 text-gray-800 mb-3 border-b pb-1.5 font-sans"><i class="fa-solid fa-box-open text-primary mr-1"></i> मेरे उत्पाद (My Bazaar Listings)</h4>
+            
+            {myBazaarItems.length === 0 ? (
+              <p class="text-[10px] text-gray-400 text-center py-4 font-sans">आपने बाज़ार में कोई समान पोस्ट नहीं किया है।</p>
+            ) : (
+              <div class="grid grid-cols-2 gap-2 text-xs">
+                {myBazaarItems.map(item => (
+                  <div key={item.id} class="bg-gray-50 border p-2 rounded-2xl flex flex-col justify-between">
+                    <img src={item.photo} class="w-full h-16 object-cover rounded-lg mb-1 bg-white" alt="Thumbnail" />
+                    <div>
+                      <h5 class="font-bold truncate mt-1">{item.name}</h5>
+                      <p class="text-[10px] text-primary font-bold">₹{item.price}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* DEVELOPER CREDITS FOOTER */}
+          <div class="text-center text-[10px] text-gray-400 py-4 font-sans leading-none border-t border-dashed mt-6">
+            Developed by <span class="font-extrabold text-gray-500">amrritxd</span>
+          </div>
+        </div>
+      );
+    }
+
+    // ──────────────────────────────────────────────────────────
+    // Admin Panel Tab Area Component View - Full Featured
+    // ──────────────────────────────────────────────────────────
+    function AdminPanelView({ onClose, triggerToast, broadcastGlobal, broadcastVillage }) {
+      const [password, setPassword] = useState("");
+      const [isAuthorized, setIsAuthorized] = useState(false);
+      const [adminTab, setAdminTab] = useState("dashboard");
+      const [users, setUsers] = useState([]);
+      const [referrals, setReferrals] = useState([]);
+      const [withdrawals, setWithdrawals] = useState([]);
+      const [sosLogs, setSosLogs] = useState([]);
+      const [bazaarPosts, setBazaarPosts] = useState([]);
+      const [complaints, setComplaints] = useState([]);
+      const [annTitle, setAnnTitle] = useState("");
+      const [annText, setAnnText] = useState("");
+      const [annTarget, setAnnTarget] = useState("All");
+      const [searchUser, setSearchUser] = useState("");
+      const [editingUser, setEditingUser] = useState(null);
+      const [confirmDelete, setConfirmDelete] = useState(null);
+      const [adminPass, setAdminPass] = useState("gaon@admin2024");
+      const [newPass, setNewPass] = useState("");
+      const [showPassChange, setShowPassChange] = useState(false);
+      const [filterVillage, setFilterVillage] = useState("All");
+      const [filterRole, setFilterRole] = useState("All");
+
+      const reloadAdminDb = () => {
+        const u = JSON.parse(localStorage.getItem("village_users") || "[]");
+        const r = JSON.parse(localStorage.getItem("referrals") || "[]");
+        const w = JSON.parse(localStorage.getItem("withdrawals") || "[]");
+        const s = JSON.parse(localStorage.getItem("sos_log") || "[]");
+        const b = JSON.parse(localStorage.getItem("bazaar_posts") || "[]");
+        setUsers(u);
+        setReferrals(r);
+        setWithdrawals(w);
+        setSosLogs(s);
+        setBazaarPosts(b);
+        // Load complaints: prefer Firebase, fallback to localStorage
+        if (dbRef) {
+          const allComplaints = [];
+          let pending = VILLAGES.length;
+          VILLAGES.forEach(v => {
+            const vk = getCleanVillagePath(v);
+            dbRef.ref(`complaints/${vk}`).once("value").then(snapshot => {
+              const data = snapshot.val();
+              if (data) {
+                Object.keys(data).forEach(k => allComplaints.push({ id: k, ...data[k], gaon: v }));
+              }
+              pending--;
+              if (pending === 0) {
+                setComplaints(allComplaints.sort((a, b) => b.timestamp - a.timestamp));
+              }
+            }).catch(() => { pending--; });
+          });
+        } else {
+          const allComplaints = [];
+          VILLAGES.forEach(v => {
+            const vk = getCleanVillagePath(v);
+            const vc = JSON.parse(localStorage.getItem(`offline_complaints_${vk}`) || "[]");
+            vc.forEach(c => allComplaints.push({...c, gaon: v}));
+          });
+          setComplaints(allComplaints.sort((a,b) => b.timestamp - a.timestamp));
+        }
+      };
+
+      const handleAuth = (e) => {
+        e.preventDefault();
+        const stored = localStorage.getItem("admin_pass") || "gaon@admin2024";
+        if (password === stored) {
+          setIsAuthorized(true);
+          reloadAdminDb();
+          triggerToast("एडमिन पैनल में आपका स्वागत है! 🔓");
+        } else {
+          triggerToast("गलत पासवर्ड!", true);
+        }
+      };
+
+      // Stats
+      const stats = {
+        totalUsers: users.length,
+        activeToday: users.filter(u => u.appOpens > 0).length,
+        pendingReferrals: referrals.filter(r => r.status === "Pending").length,
+        approvedReferrals: referrals.filter(r => r.status === "Approved").length,
+        pendingWithdrawals: withdrawals.filter(w => w.status === "Pending").length,
+        totalWithdrawn: withdrawals.filter(w => w.status === "Approved").reduce((sum, w) => sum + (w.amount || 0), 0),
+        totalPosts: bazaarPosts.length,
+        totalSOS: sosLogs.length,
+        totalComplaints: complaints.length,
+        resolvedComplaints: complaints.filter(c => c.status === "Resolved").length,
+        flagged: referrals.filter(r => r.flagged).length,
+      };
+
+      // User management
+      const deleteUser = (deviceId) => {
+        const updated = users.filter(u => u.deviceId !== deviceId);
+        localStorage.setItem("village_users", JSON.stringify(updated));
+        reloadAdminDb();
+        setConfirmDelete(null);
+        triggerToast("यूज़र हटाया गया ✓");
+      };
+
+      const banUser = (deviceId) => {
+        const updated = users.map(u => u.deviceId === deviceId ? {...u, banned: !u.banned} : u);
+        localStorage.setItem("village_users", JSON.stringify(updated));
+        reloadAdminDb();
+        triggerToast("यूज़र स्टेटस बदला ✓");
+      };
+
+      const saveEditUser = () => {
+        if (!editingUser) return;
+        const updated = users.map(u => u.deviceId === editingUser.deviceId ? editingUser : u);
+        localStorage.setItem("village_users", JSON.stringify(updated));
+        // Update Firebase too
+        if (dbRef) dbRef.ref("users/" + editingUser.deviceId).update(editingUser);
+        reloadAdminDb();
+        setEditingUser(null);
+        triggerToast("यूज़र अपडेट किया गया ✓");
+      };
+
+      // Bazaar post management
+      const deletePost = (postId) => {
+        const updated = bazaarPosts.filter(p => p.id !== postId);
+        localStorage.setItem("bazaar_posts", JSON.stringify(updated));
+        reloadAdminDb();
+        triggerToast("पोस्ट हटाई गई ✓");
+      };
+
+      // Complaint management
+      const deleteComplaint = (complaint) => {
+        const vk = getCleanVillagePath(complaint.gaon);
+        if (dbRef && complaint.id && !complaint.id.startsWith("local_")) {
+          dbRef.ref(`complaints/${vk}/${complaint.id}`).remove()
+            .catch(err => console.error("Firebase complaint delete error", err));
+        } else {
+          const key = `offline_complaints_${vk}`;
+          const current = JSON.parse(localStorage.getItem(key) || "[]");
+          const updated = current.filter(c => c.id !== complaint.id);
+          localStorage.setItem(key, JSON.stringify(updated));
+        }
+        reloadAdminDb();
+        triggerToast("शिकायत हटाई गई ✓");
+      };
+
+      const updateComplaintStatus = (complaint, status) => {
+        const vk = getCleanVillagePath(complaint.gaon);
+        if (dbRef && complaint.id && !complaint.id.startsWith("local_")) {
+          dbRef.ref(`complaints/${vk}/${complaint.id}`).update({ status });
+        } else {
+          const key = `offline_complaints_${vk}`;
+          const current = JSON.parse(localStorage.getItem(key) || "[]");
+          const idx = current.findIndex(c => c.id === complaint.id);
+          if (idx !== -1) { current[idx].status = status; localStorage.setItem(key, JSON.stringify(current)); }
+        }
+        reloadAdminDb();
+        triggerToast("स्थिति बदली ✓");
+      };
+
+      // Referral management
+      const processReferralStatusChange = (refId, newStatus) => {
+        const refs = JSON.parse(localStorage.getItem("referrals") || "[]");
+        const idx = refs.findIndex(r => r.id === refId);
+        if (idx !== -1) {
+          refs[idx].status = newStatus;
+          localStorage.setItem("referrals", JSON.stringify(refs));
+          reloadAdminDb();
+          triggerToast(`रेफ़रल ${newStatus === "Approved" ? "स्वीकृत" : "अस्वीकृत"} ✓`);
+        }
+      };
+
+      // Withdrawal management
+      const processPayoutStatusChange = (wdId, newStatus) => {
+        const wds = JSON.parse(localStorage.getItem("withdrawals") || "[]");
+        const idx = wds.findIndex(w => w.id === wdId);
+        if (idx !== -1) {
+          wds[idx].status = newStatus;
+          localStorage.setItem("withdrawals", JSON.stringify(wds));
+          reloadAdminDb();
+          triggerToast(`भुगतान ${newStatus === "Approved" ? "स्वीकृत" : "अस्वीकृत"} ✓`);
+        }
+      };
+
+      // Announcement
+      const sendAnnouncement = (e) => {
+        e.preventDefault();
+        if (!annTitle.trim() || !annText.trim()) return;
+        if (annTarget === "All") broadcastGlobal(annTitle.trim(), annText.trim(), "announcement");
+        else broadcastVillage(annTarget, annTitle.trim(), annText.trim(), "announcement");
+        setAnnTitle(""); setAnnText("");
+        triggerToast("घोषणा भेजी गई! 📢");
+      };
+
+      // Password change
+      const changePassword = (e) => {
+        e.preventDefault();
+        if (!newPass || newPass.length < 6) { triggerToast("पासवर्ड कम से कम 6 अक्षर का होना चाहिए", true); return; }
+        localStorage.setItem("admin_pass", newPass);
+        setAdminPass(newPass);
+        setNewPass("");
+        setShowPassChange(false);
+        triggerToast("पासवर्ड बदला गया ✓");
+      };
+
+      // Data reset
+      const clearAllData = (key) => {
+        localStorage.setItem(key, JSON.stringify([]));
+        reloadAdminDb();
+        triggerToast("डेटा साफ़ किया गया ✓");
+      };
+
+      // Export data as JSON
+      const exportData = () => {
+        const data = {
+          users: JSON.parse(localStorage.getItem("village_users") || "[]"),
+          referrals: JSON.parse(localStorage.getItem("referrals") || "[]"),
+          withdrawals: JSON.parse(localStorage.getItem("withdrawals") || "[]"),
+          bazaarPosts: JSON.parse(localStorage.getItem("bazaar_posts") || "[]"),
+        };
+        const blob = new Blob([JSON.stringify(data, null, 2)], {type: "application/json"});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a"); a.href = url; a.download = "gaon_digital_data.json"; a.click();
+        triggerToast("डेटा एक्सपोर्ट हुआ ✓");
+      };
+
+      const filteredUsers = users.filter(u => {
+        const matchSearch = !searchUser || (u.naam || u.name || "").toLowerCase().includes(searchUser.toLowerCase()) || (u.mobile || "").includes(searchUser);
+        const matchVillage = filterVillage === "All" || u.gaon === filterVillage;
+        const matchRole = filterRole === "All" || u.role === filterRole;
+        return matchSearch && matchVillage && matchRole;
+      });
+
+      const ADMIN_TABS = [
+        { id: "dashboard", label: "📊 डैशबोर्ड" },
+        { id: "users", label: "👥 यूज़र्स" },
+        { id: "bazaar", label: "🛒 बाज़ार" },
+        { id: "complaints", label: "📋 शिकायतें" },
+        { id: "referrals", label: "🤝 रेफरल्स" },
+        { id: "withdrawals", label: "💳 निकासी" },
+        { id: "sos", label: "🚨 SOS" },
+        { id: "announce", label: "📢 घोषणा" },
+        { id: "settings", label: "⚙️ सेटिंग्स" },
+      ];
+
+      if (!isAuthorized) {
+        return (
+          <div class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div class="bg-white rounded-3xl p-6 text-center shadow-2xl max-w-sm w-full border font-sans">
+              <div class="w-16 h-16 bg-green-50 rounded-2xl flex items-center justify-center mx-auto mb-3 border border-green-100">
+                <span class="text-3xl">🔐</span>
+              </div>
+              <h3 class="text-lg font-extrabold text-gray-800">Admin Panel</h3>
+              <p class="text-[11px] text-gray-400 mt-1 mb-5">गाँव डिजिटल प्रशासन प्रणाली</p>
+              <form onSubmit={handleAuth} class="space-y-3 text-xs">
+                <input
+                  type="password"
+                  placeholder="Admin पासवर्ड दर्ज करें..."
+                  value={password}
+                  onChange={e => setPassword(e.target.value)}
+                  class="w-full p-3 bg-gray-50 border-2 border-gray-200 rounded-xl text-center font-bold tracking-widest focus:border-primary outline-none"
+                  required
+                />
+                <div class="flex gap-2">
+                  <button type="submit" class="flex-1 py-3 bg-primary text-white font-bold rounded-xl text-sm">🔓 प्रवेश करें</button>
+                  <button type="button" onClick={onClose} class="px-4 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold">✕</button>
+                </div>
+              </form>
+            </div>
+          </div>
+        );
+      }
+
+      return (
+        <div class="fixed inset-0 bg-[#F1F8E9] z-50 max-w-md w-full mx-auto flex flex-col font-sans text-xs overflow-hidden">
+          {/* Header */}
+          <div class="bg-primary text-white px-4 py-3 flex items-center justify-between shadow-md shrink-0">
+            <div>
+              <h3 class="text-sm font-extrabold">👨‍💼 Admin Control Panel</h3>
+              <p class="text-[10px] text-green-200">गाँव डिजिटल • सम्पूर्ण नियंत्रण प्रणाली</p>
+            </div>
+            <button onClick={onClose} class="p-2 bg-white/20 text-white rounded-xl font-bold text-[11px] border border-white/30">✕ बंद</button>
+          </div>
+
+          {/* Tab Bar */}
+          <div class="flex overflow-x-auto bg-white border-b no-scrollbar shrink-0">
+            {ADMIN_TABS.map(t => (
+              <button
+                key={t.id}
+                onClick={() => setAdminTab(t.id)}
+                class={`px-3 py-2.5 whitespace-nowrap font-bold text-[11px] border-b-2 transition shrink-0 ${adminTab === t.id ? "border-primary text-primary bg-green-50" : "border-transparent text-gray-500"}`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Content */}
+          <div class="flex-grow overflow-y-auto p-3 space-y-3 no-scrollbar pb-8">
+
+            {/* ── DASHBOARD ── */}
+            {adminTab === "dashboard" && (
+              <div class="space-y-3">
+                <div class="grid grid-cols-2 gap-2">
+                  {[
+                    { label: "कुल यूज़र्स", val: stats.totalUsers, icon: "👥", color: "bg-blue-50 border-blue-200 text-blue-700" },
+                    { label: "कुल पोस्ट", val: stats.totalPosts, icon: "🛒", color: "bg-orange-50 border-orange-200 text-orange-700" },
+                    { label: "पेंडिंग रेफरल", val: stats.pendingReferrals, icon: "⏳", color: "bg-yellow-50 border-yellow-200 text-yellow-700" },
+                    { label: "स्वीकृत रेफरल", val: stats.approvedReferrals, icon: "✅", color: "bg-green-50 border-green-200 text-green-700" },
+                    { label: "पेंडिंग निकासी", val: stats.pendingWithdrawals, icon: "💳", color: "bg-purple-50 border-purple-200 text-purple-700" },
+                    { label: "कुल भुगतान", val: `₹${stats.totalWithdrawn}`, icon: "💰", color: "bg-green-50 border-green-200 text-green-700" },
+                    { label: "शिकायतें", val: stats.totalComplaints, icon: "📋", color: "bg-red-50 border-red-200 text-red-700" },
+                    { label: "SOS अलर्ट", val: stats.totalSOS, icon: "🚨", color: "bg-red-50 border-red-200 text-red-700" },
+                  ].map((s, i) => (
+                    <div key={i} class={`p-3 rounded-2xl border ${s.color} flex items-center space-x-3`}>
+                      <span class="text-2xl">{s.icon}</span>
+                      <div>
+                        <p class="text-lg font-extrabold leading-none">{s.val}</p>
+                        <p class="text-[10px] mt-0.5 opacity-80">{s.label}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {stats.flagged > 0 && (
+                  <div class="bg-red-50 border border-red-300 p-3 rounded-2xl flex items-center space-x-3">
+                    <span class="text-2xl">⚠️</span>
+                    <div>
+                      <p class="font-bold text-red-700">{stats.flagged} संदिग्ध गतिविधि</p>
+                      <p class="text-[10px] text-red-500">रेफरल फ्रॉड संभावित — जांच करें</p>
+                    </div>
+                    <button onClick={() => setAdminTab("referrals")} class="ml-auto px-3 py-1.5 bg-red-600 text-white rounded-xl font-bold text-[10px]">देखें</button>
+                  </div>
+                )}
+
+                {/* Village wise user count */}
+                <div class="bg-white p-3 rounded-2xl border space-y-2">
+                  <h4 class="font-bold border-b pb-1.5">📍 गाँव-वार उपस्थिति</h4>
+                  {VILLAGES.map(v => {
+                    const count = users.filter(u => u.gaon === v).length;
+                    const pct = stats.totalUsers > 0 ? Math.round((count / stats.totalUsers) * 100) : 0;
+                    return (
+                      <div key={v} class="space-y-0.5">
+                        <div class="flex justify-between">
+                          <span class="text-[11px] font-bold text-gray-700">{v}</span>
+                          <span class="text-[11px] text-gray-500">{count} यूज़र ({pct}%)</span>
+                        </div>
+                        <div class="w-full bg-gray-100 rounded-full h-1.5">
+                          <div class="bg-primary h-1.5 rounded-full" style={{width: `${pct}%`}}></div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Recent SOS */}
+                {sosLogs.length > 0 && (
+                  <div class="bg-white p-3 rounded-2xl border space-y-2">
+                    <h4 class="font-bold border-b pb-1.5 text-red-700">🚨 हाल के SOS (अंतिम 3)</h4>
+                    {sosLogs.slice(-3).reverse().map((log, i) => (
+                      <div key={i} class="text-[10px] bg-red-50 p-2 rounded-xl border border-red-100">
+                        <p class="font-bold text-red-800">{log.user} • {log.mobile}</p>
+                        <p class="text-gray-500">{log.gaon} • {new Date(log.timestamp).toLocaleString()}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── USERS ── */}
+            {adminTab === "users" && (
+              <div class="space-y-3">
+                {/* Search & Filters */}
+                <div class="bg-white p-3 rounded-2xl border space-y-2">
+                  <input
+                    type="text"
+                    placeholder="🔍 नाम या मोबाइल से खोजें..."
+                    value={searchUser}
+                    onChange={e => setSearchUser(e.target.value)}
+                    class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs outline-none"
+                  />
+                  <div class="grid grid-cols-2 gap-2">
+                    <select value={filterVillage} onChange={e => setFilterVillage(e.target.value)} class="p-2 bg-gray-50 border rounded-xl text-xs font-bold">
+                      <option value="All">सभी गाँव</option>
+                      {VILLAGES.map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
+                    <select value={filterRole} onChange={e => setFilterRole(e.target.value)} class="p-2 bg-gray-50 border rounded-xl text-xs font-bold">
+                      <option value="All">सभी भूमिका</option>
+                      {ROLES.map(r => <option key={r.id} value={r.id}>{r.id}</option>)}
+                    </select>
+                  </div>
+                  <p class="text-[10px] text-gray-400">{filteredUsers.length} / {users.length} यूज़र दिख रहे हैं</p>
+                </div>
+
+                <div class="space-y-2">
+                  {filteredUsers.length === 0 && <p class="text-center text-gray-400 py-8">कोई यूज़र नहीं मिला</p>}
+                  {filteredUsers.map(u => (
+                    <div key={u.deviceId} class={`bg-white border rounded-2xl overflow-hidden ${u.banned ? "opacity-60 border-red-200" : ""}`}>
+                      <div class="p-3 flex items-start justify-between gap-2">
+                        <div class="flex items-center space-x-2 min-w-0">
+                          <div class="w-9 h-9 rounded-xl bg-primary/10 flex items-center justify-center text-base shrink-0 overflow-hidden border">
+                            {u.photo ? <img src={u.photo} class="w-full h-full object-cover" /> : <span>{(u.naam || u.name || "?")[0]}</span>}
+                          </div>
+                          <div class="min-w-0">
+                            <p class="font-bold truncate">{u.naam || u.name || "—"} {u.banned ? "🚫" : ""}</p>
+                            <p class="text-[10px] text-gray-400">📞 {u.mobile}</p>
+                            <p class="text-[10px] text-gray-400">📍 {u.gaon} • 👤 {u.role}</p>
+                          </div>
+                        </div>
+                        <div class="shrink-0 text-right">
+                          <p class="text-[9px] text-gray-400">Opens: {u.appOpens || 0}</p>
+                          <p class="text-[9px] font-mono text-gray-400 truncate">{(u.deviceId || "").slice(0, 8)}...</p>
+                        </div>
+                      </div>
+                      <div class="border-t flex divide-x text-[10px] font-bold">
+                        <button onClick={() => setEditingUser({...u})} class="flex-1 py-2 text-blue-600 bg-blue-50 hover:bg-blue-100 flex items-center justify-center space-x-1">
+                          <i class="fa-solid fa-pen-to-square"></i><span>एडिट</span>
+                        </button>
+                        <button onClick={() => banUser(u.deviceId)} class={`flex-1 py-2 flex items-center justify-center space-x-1 ${u.banned ? "text-green-700 bg-green-50 hover:bg-green-100" : "text-orange-600 bg-orange-50 hover:bg-orange-100"}`}>
+                          <i class={`fa-solid ${u.banned ? "fa-unlock" : "fa-ban"}`}></i><span>{u.banned ? "अनबैन" : "बैन"}</span>
+                        </button>
+                        <button onClick={() => setConfirmDelete(u)} class="flex-1 py-2 text-red-600 bg-red-50 hover:bg-red-100 flex items-center justify-center space-x-1">
+                          <i class="fa-solid fa-trash"></i><span>हटाएं</span>
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Edit User Modal */}
+                {editingUser && (
+                  <div class="fixed inset-0 bg-black/60 z-60 flex items-end justify-center p-4">
+                    <div class="bg-white rounded-3xl p-4 w-full max-w-sm space-y-3">
+                      <h4 class="font-bold border-b pb-2">✏️ यूज़र एडिट करें</h4>
+                      <input value={editingUser.naam || editingUser.name || ""} onChange={e => setEditingUser({...editingUser, naam: e.target.value, name: e.target.value})} placeholder="नाम" class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs" />
+                      <input value={editingUser.mobile || ""} onChange={e => setEditingUser({...editingUser, mobile: e.target.value})} placeholder="मोबाइल" class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs" />
+                      <select value={editingUser.role || ""} onChange={e => setEditingUser({...editingUser, role: e.target.value})} class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs font-bold">
+                        {ROLES.map(r => <option key={r.id} value={r.id}>{r.label}</option>)}
+                      </select>
+                      <select value={editingUser.gaon || ""} onChange={e => setEditingUser({...editingUser, gaon: e.target.value})} class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs font-bold">
+                        {VILLAGES.map(v => <option key={v} value={v}>{v}</option>)}
+                      </select>
+                      <div class="flex gap-2">
+                        <button onClick={saveEditUser} class="flex-1 py-2.5 bg-primary text-white font-bold rounded-xl">💾 सहेजें</button>
+                        <button onClick={() => setEditingUser(null)} class="px-4 py-2.5 bg-gray-100 rounded-xl font-bold">रद्द</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Delete Confirm Modal */}
+                {confirmDelete && (
+                  <div class="fixed inset-0 bg-black/60 z-60 flex items-center justify-center p-4">
+                    <div class="bg-white rounded-3xl p-5 w-full max-w-sm text-center space-y-3">
+                      <span class="text-4xl">🗑️</span>
+                      <h4 class="font-bold text-gray-800">क्या आप सच में <span class="text-red-600">{confirmDelete.naam || confirmDelete.name}</span> को हटाना चाहते हैं?</h4>
+                      <p class="text-[10px] text-gray-400">यह कार्य वापस नहीं होगा।</p>
+                      <div class="flex gap-2">
+                        <button onClick={() => deleteUser(confirmDelete.deviceId)} class="flex-1 py-2.5 bg-red-600 text-white font-bold rounded-xl">हाँ, हटाएं</button>
+                        <button onClick={() => setConfirmDelete(null)} class="flex-1 py-2.5 bg-gray-100 rounded-xl font-bold">रद्द</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ── BAZAAR POSTS ── */}
+            {adminTab === "bazaar" && (
+              <div class="space-y-2">
+                <p class="text-gray-500 font-bold">कुल {bazaarPosts.length} पोस्ट</p>
+                {bazaarPosts.length === 0 && <p class="text-center text-gray-400 py-8">कोई पोस्ट नहीं</p>}
+                {bazaarPosts.map(post => (
+                  <div key={post.id} class="bg-white border rounded-2xl overflow-hidden">
+                    <div class="p-3 flex items-start gap-2">
+                      {post.photo && <img src={post.photo} class="w-14 h-14 rounded-xl object-cover border shrink-0" />}
+                      <div class="flex-grow min-w-0">
+                        <div class="flex justify-between items-start">
+                          <p class="font-bold truncate">{post.title || post.item || "—"}</p>
+                          <span class={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded ml-1 ${post.type === "Bechna" ? "bg-green-100 text-green-700" : "bg-blue-100 text-blue-700"}`}>{post.type}</span>
+                        </div>
+                        <p class="text-[10px] text-gray-500 font-sans">₹{post.price} • {post.category} • {post.gaon}</p>
+                        <p class="text-[10px] text-gray-400">by {post.sellerName} • {post.mobile}</p>
+                        <p class="text-[10px] text-gray-300">{new Date(post.timestamp).toLocaleDateString()}</p>
+                      </div>
+                    </div>
+                    <div class="border-t">
+                      <button onClick={() => deletePost(post.id)} class="w-full py-2 text-[11px] font-bold text-red-600 bg-red-50 hover:bg-red-100 flex items-center justify-center space-x-1">
+                        <i class="fa-solid fa-trash text-[10px]"></i><span>पोस्ट हटाएं</span>
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── COMPLAINTS ── */}
+            {adminTab === "complaints" && (
+              <div class="space-y-2">
+                <div class="flex justify-between items-center">
+                  <p class="text-gray-500 font-bold">कुल {complaints.length} शिकायतें ({stats.resolvedComplaints} हल)</p>
+                  <select class="p-1.5 bg-white border rounded-xl text-[11px] font-bold" onChange={e => {
+                    const val = e.target.value;
+                    if (val === "All") { reloadAdminDb(); return; }
+                  }}>
+                    <option value="All">सभी</option>
+                    <option value="Pending">पेंडिंग</option>
+                    <option value="Resolved">हल</option>
+                  </select>
+                </div>
+                {complaints.length === 0 && <p class="text-center text-gray-400 py-8">कोई शिकायत नहीं</p>}
+                {complaints.map((c, i) => (
+                  <div key={c.id || i} class="bg-white border rounded-2xl overflow-hidden">
+                    <div class="p-3 space-y-1">
+                      <div class="flex justify-between items-start gap-2">
+                        <p class="font-bold text-gray-800 text-[11px]">{c.title}</p>
+                        <span class={`shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded ${c.status === "Resolved" ? "bg-green-100 text-green-700" : c.status === "In-Progress" ? "bg-blue-100 text-blue-700" : "bg-yellow-100 text-yellow-700"}`}>{c.status || "Pending"}</span>
+                      </div>
+                      <p class="text-[10px] text-gray-500">{c.description?.slice(0, 60)}...</p>
+                      <p class="text-[10px] text-gray-400">📍 {c.gaon} • 👤 {c.senderName} • {new Date(c.timestamp).toLocaleDateString()}</p>
+                    </div>
+                    <div class="border-t flex divide-x text-[10px] font-bold">
+                      <button onClick={() => updateComplaintStatus(c, "In-Progress")} class="flex-1 py-1.5 text-blue-600 bg-blue-50 hover:bg-blue-100">🛠️ चालू</button>
+                      <button onClick={() => updateComplaintStatus(c, "Resolved")} class="flex-1 py-1.5 text-green-600 bg-green-50 hover:bg-green-100">✅ हल</button>
+                      <button onClick={() => deleteComplaint(c)} class="flex-1 py-1.5 text-red-600 bg-red-50 hover:bg-red-100">🗑️ हटाएं</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── REFERRALS ── */}
+            {adminTab === "referrals" && (
+              <div class="space-y-3">
+                <div class="grid grid-cols-3 gap-2 text-center">
+                  {[
+                    { label: "कुल", val: referrals.length, color: "bg-gray-100 text-gray-700" },
+                    { label: "पेंडिंग", val: referrals.filter(r=>r.status==="Pending").length, color: "bg-yellow-100 text-yellow-700" },
+                    { label: "स्वीकृत", val: referrals.filter(r=>r.status==="Approved").length, color: "bg-green-100 text-green-700" },
+                  ].map((s, i) => (
+                    <div key={i} class={`p-2.5 rounded-xl font-bold ${s.color}`}>
+                      <p class="text-lg">{s.val}</p>
+                      <p class="text-[10px]">{s.label}</p>
+                    </div>
+                  ))}
+                </div>
+                {referrals.length === 0 && <p class="text-center text-gray-400 py-8">कोई रेफरल नहीं</p>}
+                {referrals.map(r => {
+                  const refUser = users.find(u => u.deviceId === r.referredId) || {};
+                  const elapsedDays = Math.ceil((Date.now() - r.timestamp) / 86400000);
+                  return (
+                    <div key={r.id} class={`bg-white border rounded-2xl p-3 space-y-2 ${r.flagged ? "border-red-300 bg-red-50/30" : ""}`}>
+                      <div class="flex justify-between items-start">
+                        <div>
+                          <p class="font-bold">{r.flagged ? "⚠️ " : ""}{r.referrerName}</p>
+                          <p class="text-[10px] text-gray-400">→ {r.referredName} ({r.mobile})</p>
+                          <p class="text-[10px] text-gray-400">{elapsedDays} दिन • Opens: {refUser.appOpens || 0}/3</p>
+                        </div>
+                        <span class={`text-[9px] font-bold px-2 py-0.5 rounded ${r.status === "Approved" ? "bg-green-600 text-white" : r.status === "Rejected" ? "bg-red-600 text-white" : "bg-yellow-500 text-white"}`}>{r.status}</span>
+                      </div>
+                      <div class="flex gap-2">
+                        <button onClick={() => processReferralStatusChange(r.id, "Approved")} class="flex-1 py-1.5 bg-green-600 text-white font-bold rounded-xl text-[10px]">✅ स्वीकृत</button>
+                        <button onClick={() => processReferralStatusChange(r.id, "Rejected")} class="flex-1 py-1.5 bg-red-500 text-white font-bold rounded-xl text-[10px]">❌ अस्वीकृत</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* ── WITHDRAWALS ── */}
+            {adminTab === "withdrawals" && (
+              <div class="space-y-3">
+                <div class="bg-white p-3 rounded-2xl border">
+                  <p class="font-bold">कुल पेंडिंग: <span class="text-orange-600">{withdrawals.filter(w=>w.status==="Pending").length}</span> • भुगतान किया: <span class="text-green-600">₹{stats.totalWithdrawn}</span></p>
+                </div>
+                {withdrawals.length === 0 && <p class="text-center text-gray-400 py-8">कोई निकासी नहीं</p>}
+                {withdrawals.map(w => (
+                  <div key={w.id} class="bg-white border rounded-2xl p-3 space-y-2">
+                    <div class="flex justify-between items-start">
+                      <div>
+                        <p class="font-bold">{w.name}</p>
+                        <p class="text-[10px] text-green-700 font-bold font-mono">UPI: {w.upiId}</p>
+                        <p class="text-[10px] text-gray-400">राशि: <span class="font-bold text-gray-700 text-xs">₹{w.amount}</span> • रेफरल: {w.referralsCount}</p>
+                        <p class="text-[10px] text-gray-300">{new Date(w.timestamp).toLocaleDateString()}</p>
+                      </div>
+                      <span class={`text-[9px] font-bold px-2 py-0.5 rounded ${w.status==="Approved" ? "bg-green-600 text-white" : w.status==="Rejected" ? "bg-red-600 text-white" : "bg-yellow-500 text-white"}`}>{w.status}</span>
+                    </div>
+                    {w.status === "Pending" && (
+                      <div class="flex gap-2">
+                        <button onClick={() => processPayoutStatusChange(w.id, "Approved")} class="flex-1 py-2 bg-green-700 text-white font-bold rounded-xl text-[10px]">💰 भुगतान स्वीकृत</button>
+                        <button onClick={() => processPayoutStatusChange(w.id, "Rejected")} class="flex-1 py-2 bg-gray-200 text-gray-700 font-bold rounded-xl text-[10px]">❌ अस्वीकृत</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── SOS LOGS ── */}
+            {adminTab === "sos" && (
+              <div class="space-y-2">
+                <div class="flex justify-between items-center">
+                  <p class="text-gray-500 font-bold">कुल {sosLogs.length} SOS अलर्ट</p>
+                  <button onClick={() => clearAllData("sos_log")} class="px-3 py-1.5 bg-red-50 text-red-600 border border-red-200 rounded-xl font-bold text-[10px]">🗑️ सभी क्लियर</button>
+                </div>
+                {sosLogs.length === 0 && <p class="text-center text-gray-400 py-8">कोई SOS लॉग नहीं</p>}
+                {[...sosLogs].reverse().map((log, i) => (
+                  <div key={i} class="bg-red-50 border border-red-200 rounded-2xl p-3">
+                    <p class="font-bold text-red-700">🚨 {log.user}</p>
+                    <p class="text-[10px] text-gray-500">📞 {log.mobile} • 📍 {log.gaon}</p>
+                    <p class="text-[10px] text-gray-400">⏰ {new Date(log.timestamp).toLocaleString()}</p>
+                    {log.lat && <p class="text-[10px] text-gray-400 font-mono mt-1">GPS: {log.lat}, {log.lng}</p>}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* ── ANNOUNCEMENT ── */}
+            {adminTab === "announce" && (
+              <div class="space-y-3">
+                <div class="bg-white p-4 rounded-2xl border space-y-3">
+                  <h4 class="font-bold border-b pb-1.5">📢 नई घोषणा भेजें</h4>
+                  <form onSubmit={sendAnnouncement} class="space-y-3">
+                    <div>
+                      <label class="block text-[10px] text-gray-500 mb-1 font-bold">लक्ष्य दर्शक</label>
+                      <select value={annTarget} onChange={e => setAnnTarget(e.target.value)} class="w-full p-2.5 bg-gray-50 border rounded-xl font-bold text-xs">
+                        <option value="All">📣 सभी गाँव (Global)</option>
+                        {VILLAGES.map(v => <option key={v} value={v}>📍 {v}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label class="block text-[10px] text-gray-500 mb-1 font-bold">शीर्षक *</label>
+                      <input type="text" placeholder="जैसे: कृषि सब्सिडी योजना" value={annTitle} onChange={e => setAnnTitle(e.target.value)} class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs outline-none" required />
+                    </div>
+                    <div>
+                      <label class="block text-[10px] text-gray-500 mb-1 font-bold">सन्देश *</label>
+                      <textarea rows="4" placeholder="पूरा सन्देश लिखें..." value={annText} onChange={e => setAnnText(e.target.value)} class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs resize-none outline-none" required></textarea>
+                    </div>
+                    <button type="submit" class="w-full py-3 bg-primary text-white font-bold rounded-xl text-sm">🚀 घोषणा भेजें</button>
+                  </form>
+                </div>
+              </div>
+            )}
+
+            {/* ── SETTINGS ── */}
+            {adminTab === "settings" && (
+              <div class="space-y-3">
+                {/* Password Change */}
+                <div class="bg-white p-4 rounded-2xl border space-y-2">
+                  <div class="flex justify-between items-center">
+                    <h4 class="font-bold">🔑 Admin पासवर्ड बदलें</h4>
+                    <button onClick={() => setShowPassChange(!showPassChange)} class="text-primary font-bold text-[11px]">{showPassChange ? "रद्द" : "बदलें"}</button>
+                  </div>
+                  {showPassChange && (
+                    <form onSubmit={changePassword} class="space-y-2 pt-2">
+                      <input type="password" placeholder="नया पासवर्ड (min 6 अक्षर)" value={newPass} onChange={e => setNewPass(e.target.value)} class="w-full p-2.5 bg-gray-50 border rounded-xl text-xs outline-none" minLength="6" required />
+                      <button type="submit" class="w-full py-2.5 bg-primary text-white font-bold rounded-xl">💾 पासवर्ड सहेजें</button>
+                    </form>
+                  )}
+                </div>
+
+                {/* Data Export */}
+                <div class="bg-white p-4 rounded-2xl border space-y-2">
+                  <h4 class="font-bold">📤 डेटा एक्सपोर्ट</h4>
+                  <p class="text-[10px] text-gray-400">यूज़र, पोस्ट, और रेफरल डेटा JSON में डाउनलोड करें</p>
+                  <button onClick={exportData} class="w-full py-2.5 bg-blue-600 text-white font-bold rounded-xl text-xs">📥 JSON डाउनलोड करें</button>
+                </div>
+
+                {/* Data Management */}
+                <div class="bg-white p-4 rounded-2xl border space-y-2">
+                  <h4 class="font-bold text-red-700">⚠️ डेटा प्रबंधन (सावधानी!)</h4>
+                  {[
+                    { label: "बाज़ार पोस्ट साफ़ करें", key: "bazaar_posts", color: "bg-orange-50 text-orange-700 border-orange-200" },
+                    { label: "रेफरल लॉग साफ़ करें", key: "referrals", color: "bg-yellow-50 text-yellow-700 border-yellow-200" },
+                    { label: "SOS लॉग साफ़ करें", key: "sos_log", color: "bg-red-50 text-red-700 border-red-200" },
+                    { label: "निकासी लॉग साफ़ करें", key: "withdrawals", color: "bg-purple-50 text-purple-700 border-purple-200" },
+                  ].map(item => (
+                    <button key={item.key} onClick={() => clearAllData(item.key)} class={`w-full py-2.5 border rounded-xl font-bold text-xs ${item.color}`}>
+                      🗑️ {item.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* App Info */}
+                <div class="bg-white p-4 rounded-2xl border space-y-1 text-[10px] text-gray-500">
+                  <h4 class="font-bold text-gray-700 text-xs">ℹ️ App जानकारी</h4>
+                  <p>संस्करण: Gaon Digital v2.0</p>
+                  <p>कुल यूज़र: {users.length} | कुल पोस्ट: {bazaarPosts.length}</p>
+                  <p>Firebase: {dbRef ? "✅ जुड़ा हुआ" : "❌ ऑफलाइन"}</p>
+                  <p>Admin Pass: {localStorage.getItem("admin_pass") ? "कस्टम सेट है" : "Default (gaon@admin2024)"}</p>
+                </div>
+              </div>
+            )}
+
+          </div>
+        </div>
+      );
+    }
+
+    // Mount GaonDigitalApp inside standard DOM anchor
+    const rootElement = document.getElementById("root");
+    const reactRoot = ReactDOM.createRoot(rootElement);
+    reactRoot.render(<GaonDigitalApp />);
+  </script>
+</body>
+</html>
